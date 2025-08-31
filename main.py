@@ -1,14 +1,14 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from google.api_core.exceptions import ResourceExhausted
-from .AI.chat import chat_router
-from .AI.diff import diff_router
-from .AI.overview import overview_router
-from .AI.setting import format_rate_limit_error
-from .github_login.login import login_router
-from .github_info.get_repo_commit import repo_commit_router
-from .github_info.get_repo_list import repo_list_router
-from .github_info.get_user_info import user_info_router
+from AI.chat.chatting_repo import chat_router
+from AI.diff.analyze_diff_commit import diff_router
+from AI.overview.analyze_overview import overview_router
+from AI.setting import format_rate_limit_error
+from github_login.login import login_router
+from github_info.get_repo_commit import repo_commit_router
+from github_info.get_repo_list import repo_list_router
+from github_info.get_user_info import user_info_router
 import logging
 
 

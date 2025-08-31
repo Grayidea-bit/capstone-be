@@ -1,10 +1,10 @@
 import httpx
 from typing import Optional
 
-from fastapi import FastAPI, Query
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
-user_info_router = FastAPI()
+user_info_router = APIRouter()
 
 
 @user_info_router.get("/")

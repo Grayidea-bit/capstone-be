@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
-from ..AI.setting import validate_github_token
+from AI.setting import validate_github_token
 import httpx
 import logging
 

@@ -8,9 +8,6 @@ from tenacity import (
     retry_if_exception_type,
     RetryError,
 )
-from .chat import chat_router
-from .diff import diff_router
-from .overview import overview_router
 import httpx
 import logging
 import google.generativeai as genai
