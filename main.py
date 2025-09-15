@@ -11,6 +11,7 @@ from github_info.get_repo_list import repo_list_router
 from github_info.get_user_info import user_info_router
 import logging
 
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
@@ -25,6 +26,13 @@ app.include_router(login_router, prefix="/login", tags=["login"])
 app.include_router(repo_commit_router, prefix="/repo_commit", tags=["repo_commit"])
 app.include_router(repo_list_router, prefix="/repo_list", tags=["repo_list"])
 app.include_router(user_info_router, prefix="/user_info", tags=["user_info"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5175"],  # 根據你的前端網址調整
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 logging.basicConfig(level=logging.INFO)

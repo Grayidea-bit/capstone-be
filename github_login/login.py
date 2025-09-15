@@ -3,6 +3,9 @@ import os
 import httpx
 import logging
 
+from dotenv import load_dotenv
+load_dotenv()
+
 login_router = APIRouter()
 
 logging.basicConfig(level=logging.INFO)
@@ -15,11 +18,13 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 @login_router.get("/")
 async def github_callback(code: str = Query(...)):
     logger.info(f"收到 GitHub OAuth code: {code[:10]}...")
+    logger.info(f"GITHUB_CLIENT_ID={GITHUB_CLIENT_ID}, GITHUB_CLIENT_SECRET={'set' if GITHUB_CLIENT_SECRET else 'unset'}")
+    logger.info(f"code={code}")
     async with httpx.AsyncClient() as client:
         try:
             token_response = await client.post(
                 "https://github.com/login/oauth/access_token",
-                json={
+                data={
                     "client_id": GITHUB_CLIENT_ID,
                     "client_secret": GITHUB_CLIENT_SECRET,
                     "code": code,
