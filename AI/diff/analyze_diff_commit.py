@@ -134,21 +134,43 @@ async def analyze_commit_diff(
             combined_diff_for_prompt += f"**主要分析目標：當前 Commit (序號: {target_commit_number or 'N/A'}, SHA: {sha}) 的 Diff:**\n```diff\n{current_diff_for_prompt}\n```"
 
             prompt = f"""
-作為一位經驗豐富的程式碼審查專家，請分析以下 GitHub commit 變更。
-主要分析目標是「當前 Commit (序號: {target_commit_number or 'N/A'}, SHA: {sha})」的變更。
-如果提供了「前一個 Commit」的 diff，請將其作為比較的上下文，以理解變更的演進。
+### **角色 (Role)**
+你是一位專業的軟體架構師兼程式碼審查（Code Review）專家。你擅長從細微的程式碼變更中，洞察其對系統穩定性、可維護性和未來擴展性的深遠影響。
 
-你的分析應包含：
-1.  **變更摘要**: 簡要說明當前 commit 的主要目的是什麼。
-2.  **詳細變更**: 描述當前 commit 中引入的關鍵程式碼更改。可以分點說明。
-3.  **影響與改進**: 這些變更如何影響或改進了程式碼庫？它們解決了什麼問題（如果有的話）？
-4.  **潛在問題或建議 (可選)**: 是否有任何潛在的風險、需要注意的地方或可以進一步改進的建議？
-請使用清晰、專業的語言。
+### **任務 (Task)**
+針對「當前 Commit」的程式碼變更，生成一份結構化的審查報告。請使用「前一個 Commit」的內容作為基準，以評估變更的演進和合理性。
 
-**Commit Diff 上下文**:
-{combined_diff_for_prompt}
+### **上下文 (Context)**
+1.  **前一個 Commit (基準)** (序號: {previous_commit_number or 'N/A'}, SHA: {previous_commit_sha or 'N/A'}):
+    ```diff
+    {previous_diff_for_prompt if previous_diff_for_prompt else "無前一個 Commit 的 Diff 資訊，或這是首次提交。"}
+    ```
+2.  **當前 Commit (分析目標)** (序號: {target_commit_number or 'N/A'}, SHA: {sha}):
+    ```diff
+    {current_diff_for_prompt}
+    ```
 
-請提供你的分析報告:
+### **輸出格式 (Output Format)**
+請嚴格遵循以下 Markdown 格式輸出你的分析報告，並確保每個部分都有具體、深入的內容：
+
+#### 1. 變更摘要 (Summary)
+* **目的**: 一句話總結此 Commit 的核心意圖。
+* **類型**: 標示出變更類型（例如：新功能、錯誤修復、重構、效能優化、文件更新）。
+
+#### 2. 關鍵變更分析 (Key Changes Analysis)
+以條列方式，深入分析主要的程式碼變更點。對於每項變更，請說明：
+* **變更內容**: 具體修改了什麼？（例如：引入了新的 `ApiService` 類別）
+* **變更原因**: 為什麼需要這個變更？（例如：為了將 API 請求邏輯與業務邏輯解耦）
+
+#### 3. 影響與價值 (Impact & Value)
+* **正面影響**: 此變更對程式碼庫帶來了哪些具體好處？（例如：提升了可讀性、降低了未來修改的風險）。
+* **解決的問題**: 是否解決了某個已知的問題或需求？
+
+#### 4. 潛在風險與建議 (Potential Risks & Suggestions)
+* **風險評估**: (可選) 是否引入了新的風險？（例如：是否有未處理的邊界情況？是否可能影響效能？）
+* **改進建議**: (可選) 是否有更優雅或更穩健的實現方式？
+
+請開始生成報告：
 """
             log_prompt = prompt[:300] + "..." if len(prompt) > 300 else prompt
             logger.info(

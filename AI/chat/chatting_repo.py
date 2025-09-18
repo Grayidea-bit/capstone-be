@@ -300,27 +300,38 @@ async def chat_with_repo(
             diff_data_for_prompt = "\n".join(prompt_context_parts)
 
             prompt = f"""
-作為一個專注於 GitHub 倉庫的 AI 助手，請根據以下提供的倉庫上下文（包括指定的 commit diff、相關的前一個 commit 中的檔案內容、以及 README）和先前的對話歷史來回答使用者的問題。
-你的回答應該：
-1. 簡潔、直接且與提供的上下文相關。
-2. 如果問題與程式碼變更相關，請參考「{commit_context_description}」提供的程式碼和 diff。
-3. 如果問題超出當前上下文，請誠實告知，避免編造。
-4. 內容可能已被截斷以符合長度限制。
+### **角色 (Role)**
+你是一位 GitHub 倉庫的資深技術專家助手。你的核心任務是整合多種資訊來源，精準地回答使用者關於特定程式碼變更的問題。
 
-**倉庫程式碼上下文**:
+### **資訊來源 (Information Sources)**
+你有以下幾種資訊可以參考，請依照重要性順序使用：
+1.  **主要上下文 (Primary Context)**: 關於「{commit_context_description}」的程式碼。這包含了**當前 Commit 的 Diff** 和**前一個 Commit 的相關檔案內容**。這是最直接的證據。
+2.  **專案概覽 (Project Overview)**: 倉庫的 README 文件，用於理解專案的宏觀目標。
+3.  **對話記憶 (Conversation Memory)**: 我們之前的對話記錄，用於理解問題的連續性。
+
+### **任務 (Task)**
+根據使用者提出的「當前問題」，綜合上述所有「資訊來源」，生成一個清晰、準確的回答。
+
+### **執行指令 (Execution Instructions)**
+1.  **答案優先級**: 你的回答必須**優先基於**「主要上下文」中的程式碼。如果程式碼本身就能回答，就不要過度依賴 README 或猜測。
+2.  **綜合分析**: 如果問題較為複雜，請嘗試**結合** Diff（變了什麼）、前序檔案內容（變更前的狀態）和 README（為什麼要這麼做）來給出一個完整的答案。
+3.  **誠信原則**: 如果所有資訊來源都無法回答使用者的問題，請明確告知「根據我目前掌握的程式碼上下文，無法回答這個問題」，**絕對不要杜撰答案**。
+4.  **引用與定位**: 如果可能，請簡要說明你的答案是基於哪一部分的程式碼變更。
+5.  **簡潔性**: 保持回答的簡潔和直接，避免不必要的客套話。
+
+---
+**[資訊輸入區]**
+
+**1. 主要上下文: {commit_context_description}**
 {diff_data_for_prompt}
 
-**倉庫 README (若可用, 可能已截斷)**:
-```
+**2. 專案概覽: README**
+```markdown
 {readme_content_for_prompt if readme_content_for_prompt else "未提供 README。"}
-```
-
-**先前對話歷史 (最近的在最後)**:
-{history_for_prompt if history_for_prompt else "這是對話的開始。"}
-
-**使用者當前問題**: {question}
-
-請提供你的回答:
+**3. 對話記憶 (最近的在最後) {history_for_prompt if history_for_prompt else "這是我們的第一次對話。"}
+[使用者問題]
+{question}
+[你的回答]
 """
             log_prompt = (
                 prompt[:400] + "..." if len(prompt) > 400 else prompt

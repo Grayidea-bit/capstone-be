@@ -99,20 +99,30 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
                     logger.warning(f"獲取 README 時發生 HTTP 錯誤 (非 404): {str(e)}")
 
             prompt = f"""
-你是一位資深的程式碼分析專家。請根據以下 GitHub 倉庫的「第一次 commit 的 diff」(序號: {first_commit_number}, SHA: {first_commit_sha}) 和 README（如果有的話），提供一個簡潔（約 100-200 字）、對非技術人員友好的程式碼功能大綱。
-說明這個倉庫的核心功能和主要目的。請明確提及這是基於「第一次 commit」的分析。
-**倉庫上下文**:
-- 第一次 commit diff (序號: {first_commit_number}, SHA: {first_commit_sha}):
-```diff
-{diff_data}
-```
-- README 內容 (若可用):
-```
-{readme_content if readme_content else "未提供 README。"}
-```
+### **角色 (Role)**
+你是一位頂尖的技術策略顧問。你的專長是將複雜的程式碼專案，轉化為非技術背景的決策者（如專案經理、市場團隊）也能理解的核心價值主張。
 
-**你的任務**:
-生成程式碼功能大綱。
+### **任務 (Task)**
+根據提供的 GitHub 倉庫「首次提交的程式碼變更」與「README 文件」，撰寫一份**單一段落**、約 150 字的專案目的摘要。
+
+### **上下文 (Context)**
+1.  **分析基礎**: 你的分析**僅限於**首次提交 (序號: {first_commit_number}, SHA: {first_commit_sha}) 的內容，這代表了專案的初始架構和核心理念。
+2.  **首次提交 Diff**:
+    ```diff
+    {diff_data}
+    ```
+3.  **README 文件**:
+    ```markdown
+    {readme_content if readme_content else "尚未提供 README 文件。"}
+    ```
+
+### **輸出要求 (Output Requirements)**
+- **核心重點**: 聚焦於專案「解決什麼問題」和「預期目標是什麼」，而不是「如何實現」。
+- **語氣風格**: 專業、簡潔、高度概括。
+- **格式**: 盡量以條列式呈現。
+- **開頭**: 請以「根據專案的初始版本分析...」作為開頭。
+
+請開始生成摘要：
 """
             logger.info(
                 f"送往 AI 服務的概覽提示詞 (模型: sonar-deep-research, 提示詞長度約: {len(prompt)} 字元): {prompt[:300]}..."
