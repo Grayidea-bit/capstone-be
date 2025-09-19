@@ -119,17 +119,17 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
 ### **輸出要求 (Output Requirements)**
 - **核心重點**: 聚焦於專案「解決什麼問題」和「預期目標是什麼」，而不是「如何實現」。
 - **語氣風格**: 專業、簡潔、高度概括。
-- **格式**: 盡量以條列式呈現。
+- **格式**: 盡量以條列式列出功能要點，並嚴格遵守"Markdown"格式。
 - **開頭**: 請以「根據專案的初始版本分析...」作為開頭。
 
 請開始生成摘要：
 """
             logger.info(
-                f"送往 AI 服務的概覽提示詞 (模型: sonar-deep-research, 提示詞長度約: {len(prompt)} 字元): {prompt[:300]}..."
+                f"送往 AI 服務的概覽提示詞 (模型: sonar-pro, 提示詞長度約: {len(prompt)} 字元): {prompt[:300]}..."
             )
             overview_text = await generate_ai_content(prompt)
             logger.info(
-                f"AI 服務概覽結果 (模型: sonar-deep-research): {overview_text[:150]}..."
+                f"AI 服務概覽結果 (模型: sonar-pro): {overview_text[:150]}..."
             )
             return {"overview": overview_text}
         except httpx.HTTPStatusError as e:
