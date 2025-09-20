@@ -12,6 +12,7 @@ import httpx
 import logging
 import google.generativeai as genai
 import re
+import os
 import json
 
 
@@ -245,6 +246,10 @@ async def get_commit_number_and_list(
 def get_available_model() -> str:
     try:
         logger.info("正在嘗試列出 Gemini 模型...")
+
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+        genai.configure(api_key=GEMINI_API_KEY)
+
         all_listed_models = genai.list_models()
         usable_model_names: Set[str] = {
             m.name.split("/")[-1]
