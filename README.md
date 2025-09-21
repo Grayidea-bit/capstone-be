@@ -1,42 +1,56 @@
-### 啟動相依服務 (Redis)
+## API 端點
 
-使用 Redis 進行 API 快取與對話紀錄儲存
-建議先安裝 WSL (Windows Subsystem for Linux)，並在 WSL 的終端機 (例如 Ubuntu) 中執行後續所有指令，可以避免許多潛在的相容性問題
+**基礎 URL**: `http://127.0.0.1:8000`
 
-* **使用 Docker 啟動 (需先下載Docker)**：
-    在終端機執行以下指令，即可在背景啟動一個 Redis 容器
-    ```
-    docker run -d --name my-redis -p 6379:6379 redis
-    ```
-* **檢查 Redis 狀態**：
-    執行 `redis-cli ping`，若終端機回傳 `PONG`，則表示 Redis 已成功啟動
+| 功能 | HTTP 方法 | 路徑 & 查詢參數 | Body | 成功回應 (JSON) | 前端備註 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **GitHub 登入** | `GET` | `/login/?code=<auth_code>` | 無 | `{"access_token": "...", "user": {"login": "...", "avatar_url": "..."}}` | 處理 OAuth 回調 |
+| **獲取使用者** | `GET` | `/user_info/?access_token=<token>` | 無 | `{"username": "...", "avatar_url": "..."}` | 用於驗證 token 和顯示使用者資訊 |
+| **獲取倉庫列表** | `GET` | `/repo_list/?access_token=<token>` | 無 | `[{"full_name": "owner/repo", ...}]` | `full_name` 欄位可以直接用於下拉選單 |
+| **獲取 Commit 列表** | `GET` | `/repo_commit/repos/{owner}/{repo}?access_token=<token>` | 無 | `{"commits": [{"name": "...", "sha": "..."}]}` | 用於 PRs/Commits 頁面和聊天上下文 |
+| **獲取 PR 列表** | `GET` | `/pr/repos/{owner}/{repo}/pulls?access_token=<token>` | 無 | `[{"number": 123, "title": "...", "sha": "..."}]` | 用於 PRs/Commits 頁面 |
+| **專案概覽** | `GET` | `/overview/repos/{owner}/{repo}?access_token=<token>` | 無 | `{"overview": "...", "file_structure": "..."}` | `overview` 是 Markdown，需前端解析 |
+| **倉庫趨勢分析** | `GET` | `/trends/repos/{owner}/{repo}/trends?access_token=<token>` | 無 | `{"trends_analysis": "...", "statistics": {...}, "commit_count": 50, "activity_analysis": {...}}` | 包含兩份 AI 分析和兩份圖表數據 |
+| **分析 Commit** | `POST` | `/diff/repos/{owner}/{repo}/commits/{sha}?access_token=<token>` | 無 | `{"analysis": "...", ...}` | `analysis` 是 Markdown，需前端解析 |
+| **分析 PR** | `GET` | `/pr/repos/{owner}/{repo}/pulls/{pull_number}?access_token=<token>` | 無 | `{"pull_request_analysis": "..."}` | `pull_request_analysis` 是 Markdown |
+| **發佈 PR 評論** | `POST` | `/pr/repos/{owner}/{repo}/pulls/{pull_number}/comments?access_token=<token>` | `{"comment": "markdown_string"}` | `{"message": "...", "comment_url": "..."}` | Body 中傳入之前獲取的分析結果 |
+| **智能問答** | `POST` | `/chat/repos/{owner}/{repo}?access_token=<token>&question=...&mode=...&target_sha=...` | 無 | `{"answer": "...", "history": [...]}` | `mode` 可為 `commit`, `repository`, `what-if` |
 
-### 啟動前後端
+## 5. 所需圖表
 
-1.  **啟動後端 FastAPI 服務**：
-    * 終端機在專案根目錄 (`capstone-be/`) 下
-    * 執行以下指令啟動後端伺服器：
-        ```
-        uvicorn main:app --reload
-        ```
-2.  **開啟前端介面**：
-    ```
-    python -m http.server 5175
-    ```
+#### 1. Commit 類型分佈圖 (Doughnut Chart)
 
-## Ⅱ. 前端 API 端點列表
+- **API 端點**: `/trends/...`
+- **數據來源**: `response.statistics`
+- **範例數據結構**:
+  ```json
+  {
+    "statistics": {
+      "新功能": 25,
+      "錯誤修復": 15,
+      "程式碼重構": 8,
+      "文件與註解": 2
+    }
+  }
+  ```
 
-前端會呼叫的所有後端 API 節點
+#### 2. 模組活躍度圖 (Horizontal Bar Chart)
+- **API 端點**: `/trends/...`
 
-| **功能 (Feature)** | **HTTP 方法** | **路徑 (Path)** | **說明** |
-| :--- | :--- | :--- | :--- |
-| **GitHub 認證** | GET | `/login/` | 處理 GitHub OAuth 登入成功後的回調，用 `code` 換取 `access_token`|
-| **使用者資訊** | GET | `/user_info/` | 使用 `access_token` 獲取已登入使用者的基本資訊 (名稱、頭像) |
-| **倉庫列表** | GET | `/repo_list/` | 獲取使用者所有可存取的 GitHub 倉庫列表 |
-| **Commit 列表** | GET | `/repo_commit/repos/{owner}/{repo}` | 獲取指定倉庫的最近 Commit 列表，用於 PRs/Commits 頁面顯示 |
-| **PR 列表** | GET | `/pr/repos/{owner}/{repo}/pulls` | 獲取指定倉庫的 Pull Request 列表 |
-| **AI - 專案概覽** | GET | `/overview/repos/{owner}/{repo}` | 產生 AI 專案摘要，並獲取專案的檔案結構樹 |
-| **AI - 倉庫趨勢** | GET | `/trends/repos/{owner}/{repo}/trends` | AI 分析近期的 Commit，產生趨勢報告與分類統計圖表 |
-| **AI - 分析 Commit** | POST | `/diff/repos/{owner}/{repo}/commits/{sha}` | AI 分析單一 Commit 的程式碼變更 (diff)，並生成審查報告 |
-| **AI - 分析 PR** | GET | `/pr/repos/{owner}/{repo}/pulls/{pull_number}` | AI 分析單一 Pull Request 的程式碼變更，生成 Code Review 報告 |
-| **AI - 智能問答** | POST | `/chat/repos/{owner}/{repo}` | 根據使用者問題及指定的 Commit 上下文，提供 AI 回答 |
+ **數據來源**: `response.activity_analysis.top_modules`
+
+- **範例數據結構:**
+```json
+{
+  "activity_analysis": {
+    "top_modules": [
+      ["AI", 55],
+      ["github_info", 32],
+      ["github_login", 10]
+    ]
+  }
+}
+```
+
+
+

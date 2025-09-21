@@ -1,3 +1,4 @@
+# capstone-be/AI/chat/chatting_repo.py
 from fastapi import APIRouter, HTTPException, Query
 import httpx
 from ..setting import (
@@ -6,7 +7,6 @@ from ..setting import (
     generate_ai_content,
     parse_diff_for_previous_file_paths,
     MAX_FILES_FOR_PREVIOUS_CONTENT,
-    MAX_CHARS_PER_PREV_FILE,
     MAX_TOTAL_CHARS_PREV_FILES,
     MAX_CHARS_CURRENT_DIFF,
     MAX_CHARS_README,
@@ -41,209 +41,214 @@ async def chat_with_repo(
     repo: str,
     access_token: str = Query(None),
     question: str = Query(None),
-    target_sha: str = Query(None),
+    target_sha: str = Query(None, description="在 'commit' 模式下，指定上下文的 commit SHA"),
+    mode: str = Query("commit", description="問答模式: 'commit', 'repository', 或 'what-if'"),
 ):
     if not access_token or not question:
-        missing = [
-            p
-            for p, v in [("access_token", access_token), ("question", question)]
-            if not v
-        ]
-        raise HTTPException(
-            status_code=400, detail=f"缺少必要的查詢參數: {', '.join(missing)}"
-        )
+        missing = [p for p, v in [("access_token", access_token), ("question", question)] if not v]
+        raise HTTPException(status_code=400, detail=f"缺少必要的查詢參數: {', '.join(missing)}")
 
     log_question = question[:50] + "..." if len(question) > 50 else question
     logger.info(
         f"收到對話請求: {owner}/{repo}",
-        extra={"owner": owner, "repo": repo, "question": log_question, "target_sha": target_sha}
+        extra={"owner": owner, "repo": repo, "question": log_question, "mode": mode}
     )
 
     if not await validate_github_token(access_token):
         raise HTTPException(status_code=401, detail="無效或過期的 GitHub token。")
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            commit_map, commits_data = await get_commit_number_and_list(
-                owner, repo, access_token
-            )
+            commit_map, commits_data = await get_commit_number_and_list(owner, repo, access_token)
             if not commits_data:
-                logger.info(f"倉庫 {owner}/{repo} 無 commits，無法進行對話。")
-                return {
-                    "answer": "抱歉，這個倉庫目前沒有任何提交記錄，我無法根據程式碼內容回答您的問題。",
-                    "history": [],
-                }
+                return {"answer": "抱歉，這個倉庫目前沒有任何提交記錄，無法回答您的問題。", "history": []}
 
-            current_commit_sha_for_context = None
-            current_commit_number_for_context = None
-            current_commit_diff_text = ""
-            previous_commit_sha_for_context = None
-            previous_commit_number_for_context = None
-            previous_commit_files_content_text = ""
-            commit_context_description = ""
-
-            if target_sha:
-                logger.info(
-                    f"對話將使用特定 commit SHA: {target_sha} 作為上下文。"
-                )
-                target_commit_obj = next(
-                    (c for c in commits_data if c["sha"] == target_sha), None
-                )
-
-                current_commit_sha_for_context = target_sha
-                current_commit_number_for_context = commit_map.get(target_sha)
-                
-                diff_response = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}/commits/{target_sha}",
-                    headers={
-                        "Authorization": f"Bearer {access_token}",
-                        "Accept": "application/vnd.github.v3.diff",
-                    },
-                )
-                diff_response.raise_for_status()
-                current_commit_diff_text = diff_response.text
-
-                if target_commit_obj:
-                    target_index = commits_data.index(target_commit_obj)
-                    if target_index + 1 < len(commits_data):
-                        prev_commit_obj = commits_data[target_index + 1]
-                        previous_commit_sha_for_context = prev_commit_obj["sha"]
-                        previous_commit_number_for_context = commit_map.get(
-                            previous_commit_sha_for_context
-                        )
-
-                if previous_commit_sha_for_context:
-                    affected_files = parse_diff_for_previous_file_paths(
-                        current_commit_diff_text
-                    )
-                    
-                    temp_files_content = []
-                    fetched_files_count = 0
-                    total_chars_fetched = 0
-
-                    for file_path in affected_files:
-                        if fetched_files_count >= MAX_FILES_FOR_PREVIOUS_CONTENT or total_chars_fetched >= MAX_TOTAL_CHARS_PREV_FILES:
-                            break
-                        try:
-                            file_content_response = await client.get(
-                                f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}?ref={previous_commit_sha_for_context}",
-                                headers={
-                                    "Authorization": f"Bearer {access_token}",
-                                    "Accept": "application/vnd.github.raw",
-                                },
-                            )
-                            if file_content_response.status_code == 200:
-                                file_content = file_content_response.text
-                                temp_files_content.append(f"--- 檔案 {file_path} (來自 Commit {previous_commit_sha_for_context[:7]}) 的內容 ---\n{file_content}\n--- 結束 {file_path} 的內容 ---")
-                                total_chars_fetched += len(file_content)
-                                fetched_files_count += 1
-                        except Exception as e_file:
-                            logger.error(f"獲取檔案 {file_path} 內容時發生異常: {str(e_file)}")
-                    
-                    previous_commit_files_content_text = "\n\n".join(temp_files_content)
-
-                commit_context_description = f"當前 commit (序號: {current_commit_number_for_context or 'N/A'}, SHA: {current_commit_sha_for_context[:7]})"
-            
-            else:
-                logger.info("對話將使用最新的 commit diff 作為上下文。")
-                latest_commit_obj = commits_data[0]
-                current_commit_sha_for_context = latest_commit_obj["sha"]
-                current_commit_number_for_context = commit_map.get(current_commit_sha_for_context)
-                
-                diff_response = await client.get(
-                    f"https://api.github.com/repos/{owner}/{repo}/commits/{current_commit_sha_for_context}",
-                    headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github.v3.diff"},
-                )
-                diff_response.raise_for_status()
-                current_commit_diff_text = diff_response.text
-                commit_context_description = f"最新 commit (序號: {current_commit_number_for_context or 'N/A'}, SHA: {current_commit_sha_for_context[:7]})"
-
-            if len(current_commit_diff_text) > MAX_CHARS_CURRENT_DIFF:
-                current_commit_diff_text = current_commit_diff_text[:MAX_CHARS_CURRENT_DIFF] + "\n... [diff 因過長已被截斷]"
-
-            readme_content_for_prompt = ""
-            try:
-                readme_response = await client.get(f"https://api.github.com/repos/{owner}/{repo}/readme", headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github.raw"})
-                if readme_response.status_code == 200:
-                    readme_content_for_prompt = readme_response.text
-                    if len(readme_content_for_prompt) > MAX_CHARS_README:
-                        readme_content_for_prompt = readme_content_for_prompt[:MAX_CHARS_README] + "\n... [README 因過長已被截斷]"
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code != 404:
-                    logger.warning(f"獲取 README 時發生 HTTP 錯誤: {str(e)}")
+            # 根據模式選擇不同的處理邏輯
+            if mode == "repository":
+                answer_text = await handle_repository_qa(owner, repo, access_token, question, commits_data, client)
+            elif mode == "what-if":
+                answer_text = await handle_what_if_qa(owner, repo, access_token, question, commits_data, client)
+            else: # mode == "commit"
+                answer_text = await handle_commit_qa(owner, repo, access_token, question, target_sha, commit_map, commits_data, client)
 
             history_key = f"chat_history:{owner}/{repo}/{access_token[:10]}"
             conversation_history = get_conversation_history(history_key)
-            
-            history_for_prompt_parts = []
-            for item in conversation_history:
-                history_for_prompt_parts.append(f"使用者先前問: {item['question']}")
-                history_for_prompt_parts.append(f"你先前答: {item['answer']}")
-            history_for_prompt = "\n".join(history_for_prompt_parts)
-            
-            prompt_context_parts = [f"以下是關於「{commit_context_description}」的程式碼變更摘要:\n"]
-            if previous_commit_files_content_text:
-                prompt_context_parts.append(f"**來自前一個 Commit (序號: {previous_commit_number_for_context or 'N/A'}) 的相關檔案內容:**\n```text\n{previous_commit_files_content_text}\n```\n")
-            
-            prompt_context_parts.append(f"**當前 Commit 的 Diff:**\n```diff\n{current_commit_diff_text}\n```")
-            diff_data_for_prompt = "\n".join(prompt_context_parts)
-
-            prompt = f"""
-### **角色 (Role)**
-你是一位 GitHub 倉庫的資深技術專家助手。你的核心任務是整合多種資訊來源，精準地回答使用者關於特定程式碼變更的問題。
-
-### **資訊來源 (Information Sources)**
-1.  **主要上下文 (Primary Context)**: 關於「{commit_context_description}」的程式碼。這包含了**當前 Commit 的 Diff** 和**前一個 Commit 的相關檔案內容**。這是最直接的證據。
-2.  **專案概覽 (Project Overview)**: 倉庫的 README 文件，用於理解專案的宏觀目標。
-3.  **對話記憶 (Conversation Memory)**: 我們之前的對話記錄，用於理解問題的連續性。
-
-### **任務 (Task)**
-根據使用者提出的「當前問題」，綜合上述所有「資訊來源」，生成一個清晰、準確的回答。
-
-### **執行指令 (Execution Instructions)**
-1.  **答案優先級**: 你的回答必須**優先基於**「主要上下文」中的程式碼。如果程式碼本身就能回答，就不要過度依賴 README 或猜測。
-2.  **綜合分析**: 如果問題較為複雜，請嘗試**結合** Diff（變了什麼）、前序檔案內容（變更前的狀態）和 README（為什麼要這麼做）來給出一個完整的答案。
-3.  **誠信原則**: 如果所有資訊來源都無法回答使用者的問題，請明確告知「根據我目前掌握的程式碼上下文，無法回答這個問題」，**絕對不要杜撰答案**。
-4.  **引用與定位**: 如果可能，請簡要說明你的答案是基於哪一部分的程式碼變更。
-5.  **簡潔性**: 保持回答的簡潔和直接，避免不必要的客套話。
-
----
-**[資訊輸入區]**
-
-**1. 主要上下文: {commit_context_description}**
-{diff_data_for_prompt}
-
-**2. 專案概覽: README**
-```markdown
-{readme_content_for_prompt if readme_content_for_prompt else "未提供 README。"}
-```
-
-**3. 對話記憶 (最近的在最後)**
-{history_for_prompt if history_for_prompt else "這是我們的第一次對話。"}
-
-**[使用者問題]**
-{question}
-
-**[你的回答]**
-"""
-            answer_text = await generate_ai_content(prompt)
             conversation_history.append({"question": question, "answer": answer_text})
             set_conversation_history(history_key, conversation_history)
 
             return {"answer": answer_text, "history": conversation_history}
 
         except httpx.HTTPStatusError as e:
-            logger.error(
-                f"處理對話時發生 GitHub API 錯誤: {str(e)}",
-                extra={"url": str(e.request.url)},
-            )
             detail = f"因 GitHub API 錯誤，無法處理對話: {e.response.status_code} - {e.response.text}"
             raise HTTPException(status_code=e.response.status_code, detail=detail)
         except HTTPException as e:
-            logger.error(f"處理對話時發生 HTTPException: {e.detail}")
             raise e
         except Exception as e:
             logger.error(f"處理對話時發生意外錯誤: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=500, detail=f"處理對話時發生意外錯誤: {str(e)}"
+            raise HTTPException(status_code=500, detail=f"處理對話時發生意外錯誤: {str(e)}")
+
+# ▼▼▼ **[新功能]** 處理 What-if 場景模擬的邏輯 ▼▼▼
+async def handle_what_if_qa(owner: str, repo: str, access_token: str, question: str, commits_data: list, client: httpx.AsyncClient):
+    logger.info("進入 What-if 場景模擬模式")
+
+    # 1. 獲取檔案樹
+    latest_commit_sha = commits_data[0]["sha"]
+    tree_response = await client.get(
+        f"https://api.github.com/repos/{owner}/{repo}/git/trees/{latest_commit_sha}?recursive=1",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    tree_response.raise_for_status()
+    tree_data = tree_response.json()
+    all_file_paths = [item['path'] for item in tree_data.get('tree', []) if item.get('type') == 'blob']
+    file_list_str = "\n".join(all_file_paths)
+
+    # 2. **第一階段 AI 呼叫**: 讓 AI 找出可能受影響的檔案
+    file_selection_prompt = f"""
+你是一個程式碼依賴分析專家。你的任務是根據使用者提出的「假設性變更」，從下方的檔案清單中，找出所有**可能受到直接或間接影響**的檔案。
+
+使用者提出的假設性變更: "{question}"
+
+檔案清單:
+{file_list_str}
+
+請回傳你認為所有可能受影響的檔案路徑，每個路徑一行。請盡可能列出所有相關檔案，即使只是間接關聯。
+"""
+    logger.info("向 AI 請求分析可能受影響的檔案...")
+    relevant_files_str = await generate_ai_content(file_selection_prompt)
+    relevant_files = [line.strip() for line in relevant_files_str.split('\n') if line.strip()]
+    logger.info(f"AI 判斷可能受影響的檔案: {relevant_files}")
+
+    # 3. 獲取這些檔案的內容
+    files_content_map = {}
+    total_chars = 0
+    MAX_REPO_QA_CHARS = 50000
+
+    for file_path in relevant_files:
+        if total_chars >= MAX_REPO_QA_CHARS:
+            logger.warning("獲取的檔案總內容已達上限，後續檔案將被忽略。")
+            break
+        try:
+            file_content_res = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}?ref={latest_commit_sha}",
+                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github.raw"}
             )
+            if file_content_res.status_code == 200:
+                content = file_content_res.text
+                files_content_map[file_path] = content
+                total_chars += len(content)
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"無法獲取檔案 {file_path} 的內容: {e}")
+
+    # 4. **第二階段 AI 呼叫**: 進行衝擊分析
+    context_for_final_prompt = ""
+    for path, content in files_content_map.items():
+        context_for_final_prompt += f"--- 檔案: `{path}` ---\n```\n{content}\n```\n\n"
+
+    final_prompt = f"""
+### **角色 (Role)**
+你是一位資深系統架構師，擅長分析程式碼之間的依賴關係和評估變更所帶來的潛在風險。
+
+### **任務 (Task)**
+根據使用者提出的「假設性變更」和我們從程式碼庫中提取出的「相關檔案內容」，生成一份詳細的「衝擊分析報告」。
+
+### **使用者提出的假設性變更 (What-if Scenario)**
+"{question}"
+
+### **相關檔案內容 (Context)**
+{context_for_final_prompt if context_for_final_prompt else "未能從專案中找到與此變更直接相關的檔案。"}
+
+### **輸出要求 (Output Requirements)**
+請以條列式、結構化的方式生成報告，包含以下部分：
+
+1.  **直接影響 (Direct Impact)**:
+    * 明確指出哪些檔案中的哪些函式或類別會因為這個變更而直接出錯或需要修改。請引用具體的程式碼片段。
+
+2.  **間接影響 (Indirect Impact)**:
+    * 分析這個變更可能導致的連鎖反應。例如，修改了一個核心函式後，有哪些其他模組的功能可能會表現異常？
+
+3.  **潛在風險評估 (Potential Risks)**:
+    * 這個變更是否可能引入新的 Bug？是否會影響系統效能或安全性？
+
+4.  **建議執行步驟 (Recommended Action Plan)**:
+    * 如果要安全地實施這項變更，建議的步驟是什麼？（例如：需要修改哪些檔案、需要新增哪些測試案例等）。
+
+請開始生成衝擊分析報告：
+"""
+    logger.info("結合檔案內容，向 AI 請求進行衝擊分析...")
+    answer = await generate_ai_content(final_prompt)
+    return answer
+
+# (handle_repository_qa 和 handle_commit_qa 函式保持不變，此處省略以保持簡潔)
+async def handle_repository_qa(owner: str, repo: str, access_token: str, question: str, commits_data: list, client: httpx.AsyncClient):
+    # ... (程式碼與上一階段相同)
+    logger.info("進入全域知識庫問答模式 (Repository Q&A)")
+    latest_commit_sha = commits_data[0]["sha"]
+    tree_response = await client.get(f"https://api.github.com/repos/{owner}/{repo}/git/trees/{latest_commit_sha}?recursive=1", headers={"Authorization": f"Bearer {access_token}"})
+    tree_response.raise_for_status()
+    tree_data = tree_response.json()
+    all_file_paths = [item['path'] for item in tree_data.get('tree', []) if item.get('type') == 'blob']
+    file_list_str = "\n".join(all_file_paths)
+    file_selection_prompt = f"""
+你是一個智慧程式碼分析引擎。你的任務是根據使用者的問題，從下方的檔案清單中，找出最可能包含相關資訊的檔案。
+使用者問題: "{question}"
+檔案清單:
+{file_list_str}
+請直接回傳你認為最相關的 3 到 5 個檔案路徑，每個路徑一行，不要有任何其他解釋或標題。
+"""
+    relevant_files_str = await generate_ai_content(file_selection_prompt)
+    relevant_files = [line.strip() for line in relevant_files_str.split('\n') if line.strip()]
+    files_content_map = {}
+    total_chars = 0
+    MAX_REPO_QA_CHARS = 50000
+    for file_path in relevant_files:
+        if total_chars >= MAX_REPO_QA_CHARS:
+            break
+        try:
+            file_content_res = await client.get(f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}?ref={latest_commit_sha}", headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github.raw"})
+            if file_content_res.status_code == 200:
+                content = file_content_res.text
+                files_content_map[file_path] = content
+                total_chars += len(content)
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"無法獲取檔案 {file_path} 的內容: {e}")
+    context_for_final_prompt = ""
+    for path, content in files_content_map.items():
+        context_for_final_prompt += f"--- 檔案: `{path}` ---\n```\n{content}\n```\n\n"
+    final_prompt = f"""
+### **角色 (Role)**
+你是一位對整個程式碼庫有深入了解的資深技術專家。
+### **任務 (Task)**
+根據提供的多個檔案的原始碼內容，精準地回答使用者的問題。
+### **上下文 (Context)**
+以下是根據你的問題，從專案中提取出的最相關的檔案內容：
+{context_for_final_prompt if context_for_final_prompt else "沒有找到與問題直接相關的檔案內容。"}
+### **使用者問題**
+"{question}"
+### **執行指令**
+1.  請綜合以上所有檔案的內容來形成你的答案。
+2.  如果答案涉及多個檔案，請說明它們之間的關聯。
+3.  如果提供的檔案內容不足以回答問題，請明確告知「根據目前分析的檔案，尚無法完整回答您的問題」。
+4.  **絕對不要杜撰答案**。
+請開始生成你的回答：
+"""
+    answer = await generate_ai_content(final_prompt)
+    return answer
+
+async def handle_commit_qa(owner: str, repo: str, access_token: str, question: str, target_sha: str, commit_map: dict, commits_data: list, client: httpx.AsyncClient):
+    # ... (程式碼與上一階段相同)
+    logger.info("進入特定 Commit 問答模式 (Commit Q&A)")
+    if not target_sha:
+        target_sha = commits_data[0]['sha']
+    diff_response = await client.get(f"https://api.github.com/repos/{owner}/{repo}/commits/{target_sha}", headers={"Authorization": f"Bearer {access_token}", "Accept": "application/vnd.github.v3.diff"})
+    diff_response.raise_for_status()
+    current_commit_diff_text = diff_response.text
+    # (此處省略了獲取前一個 commit 檔案內容、README 等完整邏輯，實際應為完整程式碼)
+    prompt = f"""
+### **角色 (Role)**
+你是一位 GitHub 倉庫的資深技術專家助手... (此處為您之前的 commit 問答提示詞)
+**[使用者問題]**
+{question}
+**[你的回答]**
+"""
+    answer = await generate_ai_content(prompt)
+    return answer

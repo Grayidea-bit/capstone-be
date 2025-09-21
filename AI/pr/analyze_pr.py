@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query
+# capstone-be/AI/pr/analyze_pr.py
+from fastapi import APIRouter, HTTPException, Query, Body
+from typing import Dict
 import httpx
 from ..setting import (
     validate_github_token,
@@ -9,7 +11,38 @@ from ..setting import (
 
 pr_router = APIRouter()
 
+# [新功能] 專門用來發佈評論的函式
+async def post_comment_to_github_pr(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    access_token: str,
+    comment_body: str
+):
+    """將評論發佈到指定的 Pull Request。"""
+    comment_url = f"https://api.github.com/repos/{owner}/{repo}/issues/{pull_number}/comments"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(comment_url, json={"body": comment_body}, headers=headers)
+            response.raise_for_status()
+            logger.info(f"成功將評論發佈至 PR #{pull_number}")
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"發佈評論到 PR #{pull_number} 時發生 GitHub API 錯誤: {e.response.text}",
+            )
+            # 將 GitHub 的錯誤直接拋出給前端
+            raise HTTPException(status_code=e.response.status_code, detail=f"GitHub API Error: {e.response.text}")
+        except Exception as e:
+            logger.error(f"發佈評論到 PR #{pull_number} 時發生意外錯誤: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail="發佈評論時發生未知錯誤")
 
+
+# [修改] 原有的分析函式，移除發佈評論的邏輯
 @pr_router.get("/repos/{owner}/{repo}/pulls/{pull_number}")
 async def analyze_pr_diff(
     owner: str,
@@ -20,16 +53,14 @@ async def analyze_pr_diff(
     if not access_token:
         raise HTTPException(status_code=401, detail="缺少 Access Token。")
 
-    logger.info(
-        f"收到 PR 分析請求: {owner}/{repo}/pulls/{pull_number}",
-        extra={"owner": owner, "repo": repo, "pull_number": pull_number},
-    )
+    logger.info(f"收到 PR 分析請求: {owner}/{repo}/pulls/{pull_number}")
 
     if not await validate_github_token(access_token):
         raise HTTPException(status_code=401, detail="無效或過期的 GitHub token。")
 
     async with httpx.AsyncClient() as client:
         try:
+            # ... (此處的程式碼與之前相同，用於獲取 PR 資訊和 diff)
             pr_info_response = await client.get(
                 f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -52,14 +83,11 @@ async def analyze_pr_diff(
             logger.info(f"成功獲取 PR #{pull_number} 的 diff，長度: {len(pr_diff)} 字元。")
 
             if len(pr_diff) > MAX_CHARS_PR_DIFF:
-                logger.warning(
-                    f"PR diff 過大 ({len(pr_diff)} 字元)，將截斷至 {MAX_CHARS_PR_DIFF}。"
-                )
                 pr_diff = pr_diff[:MAX_CHARS_PR_DIFF] + "\n... [diff 因過長已被截斷]"
 
             prompt = f"""
 ### **角色 (Role)**
-你是一位資深的軟體工程師，擅長進行程式碼審查 (Code Review)。
+你是一位資深的軟體工程師，擅長進行程式碼審查 (Code Review)。你的分析應該客觀、具建設性且易於理解。
 
 ### **任務 (Task)**
 根據提供的 Pull Request (PR) 資訊，包含標題、描述和程式碼變更 (diff)，撰寫一份專業的 Code Review 報告。
@@ -88,19 +116,39 @@ async def analyze_pr_diff(
 #### 3. **潛在問題與建議**
 * (可選) 指出程式碼中可能存在的潛在風險、未處理的邊界情況或可以改進的地方。
 * (可選) 提出具體的修改建議。如果沒有，可以寫「從程式碼變更來看，目前沒有發現明顯的潛在問題。」
-
-請開始生成 Code Review 報告：
 """
             analysis_text = await generate_ai_content(prompt)
+            
             return {"pull_request_analysis": analysis_text}
 
         except httpx.HTTPStatusError as e:
-            logger.error(
-                f"分析 PR 時發生 GitHub API 錯誤: {e}",
-                extra={"url": str(e.request.url), "status_code": e.response.status_code},
-            )
             detail = f"因 GitHub API 錯誤，無法分析 PR: {e.response.status_code} - {e.response.text}"
             raise HTTPException(status_code=e.response.status_code, detail=detail)
         except Exception as e:
             logger.error(f"分析 PR 時發生意外錯誤: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"分析 PR 時發生意外錯誤: {str(e)}")
+
+# **[新功能]** 新增一個 POST 路由來處理發佈評論的請求
+@pr_router.post("/repos/{owner}/{repo}/pulls/{pull_number}/comments")
+async def post_pr_comment(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    payload: Dict = Body(...),
+    access_token: str = Query(None),
+):
+    if not access_token:
+        raise HTTPException(status_code=401, detail="缺少 Access Token。")
+
+    comment = payload.get("comment")
+    if not comment:
+        raise HTTPException(status_code=400, detail="評論內容不得為空。")
+
+    if not await validate_github_token(access_token):
+        raise HTTPException(status_code=401, detail="無效或過期的 GitHub token。")
+    
+    comment_to_post = f"### 🤖 AI Code Review 報告\n\n" + comment
+    
+    result = await post_comment_to_github_pr(owner, repo, pull_number, access_token, comment_to_post)
+    
+    return {"message": "評論已成功發佈！", "comment_url": result.get("html_url")}

@@ -27,7 +27,7 @@ async def get_repos(access_token: str = Query(None)):
             repos_response = await client.get(
                 "https://api.github.com/user/repos",
                 headers={"Authorization": f"Bearer {access_token}"},
-                params={"sort": "updated", "per_page": 100},
+                params={"type": "all", "sort": "updated", "per_page": 100},
             )
             repos_response.raise_for_status()
             repos_response.raise_for_status()
