@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+httpx
+python-dotenv
+google-generativeai
+tenacity
+redis
+python-json-logger

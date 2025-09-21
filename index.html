@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub AI 分析工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .spinner { border-top-color: #3498db; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #chat-output::-webkit-scrollbar { width: 6px; }
+        #chat-output::-webkit-scrollbar-thumb { background-color: #4A5568; border-radius: 3px; }
+        .analysis-card { transition: all 0.3s ease; }
+        .btn-action:disabled { background-color: #9CA3AF; cursor: not-allowed; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 min-h-screen">
+    <div class="container mx-auto p-4 md:p-6 lg:p-8">
+
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center mb-6">
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-4 md:mb-0">
+                <i class="fab fa-github-alt mr-2"></i> GitHub AI 分析工具
+            </h1>
+            <div id="user-info" class="flex items-center space-x-4">
+                <button id="login-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                    <i class="fab fa-github mr-2"></i> 使用 GitHub 登入
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content (Hidden initially) -->
+        <main id="main-content" class="hidden">
+            <!-- Repo Selector -->
+            <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-lg">
+                <label for="repo-select" class="block text-lg font-medium text-gray-300 mb-2">選擇您的倉庫:</label>
+                <select id="repo-select" class="w-full bg-gray-700 text-white p-3 rounded-md border border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="">請選擇一個倉庫...</option>
+                </select>
+            </div>
+
+            <!-- Action Buttons -->
+            <div id="action-buttons" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                <button id="overview-btn" class="btn-action bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-search mr-2"></i> 專案概覽
+                </button>
+                <button id="trends-btn" class="btn-action bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-chart-line mr-2"></i> 倉庫趨勢分析
+                </button>
+                <button id="pr-btn" class="btn-action bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-code-pull-request mr-2"></i> PRs / Commits
+                </button>
+                 <button id="chat-btn" class="btn-action bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-comments mr-2"></i> 智能問答
+                </button>
+            </div>
+
+            <!-- Analysis Display Area -->
+            <div id="analysis-output" class="analysis-card bg-gray-800 p-6 rounded-lg shadow-lg min-h-[400px] flex items-center justify-center">
+                <div id="initial-message" class="text-center text-gray-400">
+                    <i class="fas fa-arrow-up fa-2x mb-4"></i>
+                    <p class="text-xl">請先從上方選擇一個倉庫，然後點擊功能按鈕開始分析。</p>
+                </div>
+                 <div id="loading-spinner" class="hidden text-center">
+                    <div class="spinner w-16 h-16 rounded-full border-4 border-gray-600 border-t-indigo-500 mx-auto"></div>
+                    <p class="mt-4 text-lg">分析中，請稍候...</p>
+                </div>
+                <div id="content-display" class="w-full"></div>
+            </div>
+        </main>
+    </div>
+
+<script>
+const GITHUB_CLIENT_ID = 'Ov23li56CKrX18dJODju';
+const BACKEND_URL = 'http://127.0.0.1:8000';
+
+// DOM Elements
+const loginBtn = document.getElementById('login-btn');
+const userInfoDiv = document.getElementById('user-info');
+const mainContent = document.getElementById('main-content');
+const repoSelect = document.getElementById('repo-select');
+
+const overviewBtn = document.getElementById('overview-btn');
+const trendsBtn = document.getElementById('trends-btn');
+const prBtn = document.getElementById('pr-btn');
+const chatBtn = document.getElementById('chat-btn');
+const actionButtons = [overviewBtn, trendsBtn, prBtn, chatBtn];
+
+const analysisOutput = document.getElementById('analysis-output');
+const loadingSpinner = document.getElementById('loading-spinner');
+const contentDisplay = document.getElementById('content-display');
+const initialMessage = document.getElementById('initial-message');
+
+let accessToken = null;
+let currentUser = null;
+let selectedRepo = null;
+
+// --- UTILITY FUNCTIONS ---
+function showLoading() {
+    initialMessage.classList.add('hidden');
+    contentDisplay.innerHTML = '';
+    loadingSpinner.classList.remove('hidden');
+}
+
+function hideLoading() {
+    loadingSpinner.classList.add('hidden');
+}
+
+function displayContent(html) {
+    hideLoading();
+    contentDisplay.innerHTML = html;
+}
+
+function displayError(message) {
+    hideLoading();
+    contentDisplay.innerHTML = `
+        <div class="bg-red-900 border-l-4 border-red-500 text-red-200 p-4 rounded-md" role="alert">
+            <p class="font-bold">發生錯誤</p>
+            <p>${message}</p>
+        </div>
+    `;
+}
+
+async function apiFetch(endpoint, options = {}) {
+    try {
+        const response = await fetch(`${BACKEND_URL}${endpoint}`, options);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('API Fetch Error:', error);
+        displayError(error.message);
+        throw error;
+    }
+}
+
+// --- GITHUB AUTHENTICATION ---
+loginBtn.addEventListener('click', () => {
+    window.location.href = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=repo`;
+});
+
+async function handleOAuthCallback() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    if (code) {
+        window.history.pushState({}, document.title, window.location.pathname);
+        try {
+            const data = await apiFetch(`/login/?code=${code}`);
+            accessToken = data.access_token;
+            localStorage.setItem('github_access_token', accessToken);
+            await initializeUser();
+        } catch (error) {
+            displayError('GitHub 登入失敗，請重試。');
+        }
+    }
+}
+
+async function initializeUser() {
+    accessToken = localStorage.getItem('github_access_token');
+    if (accessToken) {
+        try {
+            const userData = await apiFetch(`/user_info/?access_token=${accessToken}`);
+            currentUser = userData.username;
+            userInfoDiv.innerHTML = `
+                <img src="${userData.avatar_url}" alt="${userData.username}" class="w-12 h-12 rounded-full border-2 border-indigo-500">
+                <span class="font-semibold text-lg">${userData.username}</span>
+                <button id="logout-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">登出</button>
+            `;
+            document.getElementById('logout-btn').addEventListener('click', () => {
+                localStorage.removeItem('github_access_token');
+                window.location.reload();
+            });
+            loginBtn.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            await loadRepos();
+        } catch (error) {
+            localStorage.removeItem('github_access_token');
+            accessToken = null;
+        }
+    }
+}
+
+// --- REPO AND DATA LOADING ---
+async function loadRepos() {
+    showLoading();
+    try {
+        const repos = await apiFetch(`/repo_list/?access_token=${accessToken}`);
+        repoSelect.innerHTML = '<option value="">請選擇一個倉庫...</option>';
+        repos.forEach(repo => {
+            const option = document.createElement('option');
+            option.value = repo.name;
+            option.textContent = repo.full_name;
+            repoSelect.appendChild(option);
+        });
+        hideLoading();
+        initialMessage.classList.remove('hidden');
+    } catch (error) {
+        displayError('無法載入您的倉庫列表。');
+    }
+}
+
+repoSelect.addEventListener('change', () => {
+    selectedRepo = repoSelect.value;
+    if (selectedRepo) {
+        actionButtons.forEach(btn => btn.disabled = false);
+        initialMessage.classList.add('hidden');
+        contentDisplay.innerHTML = '';
+    } else {
+        actionButtons.forEach(btn => btn.disabled = true);
+        initialMessage.classList.remove('hidden');
+    }
+});
+
+// --- BUTTON EVENT LISTENERS ---
+overviewBtn.addEventListener('click', getOverview);
+trendsBtn.addEventListener('click', getTrends);
+prBtn.addEventListener('click', showCommitPRScreen);
+chatBtn.addEventListener('click', showChatScreen);
+
+// --- ANALYSIS FUNCTIONS ---
+async function getOverview() {
+    if (!selectedRepo) return;
+    showLoading();
+    try {
+        const data = await apiFetch(`/overview/repos/${currentUser}/${selectedRepo}?access_token=${accessToken}`);
+        
+        // 【修改點】更新 HTML 結構以同時顯示 AI 概覽和檔案結構
+        const html = `
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div>
+                    <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-blue-500 pb-2">
+                        <i class="fas fa-search mr-2"></i>AI 專案概覽
+                    </h2>
+                    <div class="prose prose-invert max-w-none text-gray-300">
+                        ${marked.parse(data.overview)}
+                    </div>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-gray-500 pb-2">
+                        <i class="fas fa-folder-tree mr-2"></i>檔案結構
+                    </h2>
+                    <pre class="bg-gray-900 p-4 rounded-md text-gray-300 overflow-auto h-[400px] text-sm"><code>${data.file_structure || '無法載入檔案結構。'}</code></pre>
+                </div>
+            </div>
+        `;
+        displayContent(html);
+    } catch (error) {}
+}
+
+async function getTrends() {
+    if (!selectedRepo) return;
+    showLoading();
+    try {
+        const data = await apiFetch(`/trends/repos/${currentUser}/${selectedRepo}/trends?access_token=${accessToken}`);
+        const stats = data.statistics;
+        const labels = Object.keys(stats);
+        const values = Object.values(stats);
+
+        const html = `<h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-green-500 pb-2">倉庫趨勢分析 (最近 ${data.commit_count} 筆)</h2><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><canvas id="trends-chart"></canvas></div><div class="prose prose-invert max-w-none text-gray-300">${marked.parse(data.trends_analysis)}</div></div>`;
+        displayContent(html);
+        
+        const ctx = document.getElementById('trends-chart').getContext('2d');
+        new Chart(ctx, {
+            type: 'doughnut',
+            data: { labels, datasets: [{ label: 'Commit 分類', data: values, backgroundColor: ['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#6B7280'], borderColor: '#4B5563', borderWidth: 1 }] },
+            options: { responsive: true, plugins: { legend: { position: 'top', labels: { color: '#D1D5DB' } }, title: { display: true, text: 'Commit 分類統計', color: '#F9FAFB' } } }
+        });
+    } catch (error) {}
+}
+
+async function showCommitPRScreen() {
+    if (!selectedRepo) return;
+    showLoading();
+    try {
+        const [commits, prs] = await Promise.all([
+             apiFetch(`/repo_commit/repos/${currentUser}/${selectedRepo}?access_token=${accessToken}`),
+             // *** 這就是修正的地方 ***
+             // 原本的 /pr/ 路由缺少 pull_number 導致 404
+             // 我們將它指向剛剛建立的、用來獲取列表的路由
+             apiFetch(`/pr/repos/${currentUser}/${selectedRepo}/pulls?access_token=${accessToken}`)
+        ]);
+
+        let commitsHtml = commits.commits.slice(0, 15).map(c => `<li class="border-b border-gray-700 py-2 flex justify-between items-center"><span class="truncate pr-4" title="${c.name}">${c.name.split('\n')[0]}</span><button class="commit-analyze-btn bg-gray-600 hover:bg-gray-500 text-white text-sm py-1 px-2 rounded flex-shrink-0" data-sha="${c.sha}">分析 Commit</button></li>`).join('');
+        
+        // 我們從新的 PR 列表中正確地產生 HTML
+        let prsHtml = prs.map(pr => `<li class="border-b border-gray-700 py-2 flex justify-between items-center"><span class="truncate pr-4" title="${pr.title}">#${pr.number} ${pr.title}</span><button class="pr-analyze-btn bg-purple-600 hover:bg-purple-500 text-white text-sm py-1 px-2 rounded flex-shrink-0" data-pr-number="${pr.number}">分析 PR</button></li>`).join('');
+
+        const html = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8"><div><h3 class="text-xl font-bold mb-3 text-white">最近的 Pull Requests</h3><ul class="bg-gray-700 p-3 rounded-lg">${prsHtml || '<li>無開啟中的 Pull Requests</li>'}</ul></div><div><h3 class="text-xl font-bold mb-3 text-white">最近的 Commits</h3><ul class="bg-gray-700 p-3 rounded-lg">${commitsHtml || '<li>無 Commits</li>'}</ul></div></div><div id="commit-pr-analysis-result" class="mt-6"></div>`;
+        displayContent(html);
+        
+        document.querySelectorAll('.commit-analyze-btn').forEach(btn => btn.addEventListener('click', (e) => analyzeCommit(e.target.dataset.sha)));
+        document.querySelectorAll('.pr-analyze-btn').forEach(btn => btn.addEventListener('click', (e) => analyzePR(e.target.dataset.prNumber)));
+    } catch (error) {
+        displayError('無法獲取 Commits 或 PRs 列表。');
+    }
+}
+
+async function analyzeCommit(sha) {
+    const resultDiv = document.getElementById('commit-pr-analysis-result');
+    resultDiv.innerHTML = `<div class="text-center p-4">分析 Commit ${sha.substring(0,7)} 中...</div>`;
+    const endpoint = `/diff/repos/${currentUser}/${selectedRepo}/commits/${sha}?access_token=${accessToken}`;
+    try {
+        const data = await apiFetch(endpoint, { method: 'POST' });
+        resultDiv.innerHTML = `<h4 class="text-lg font-bold mt-4 mb-2">Commit ${sha.substring(0,7)} 分析結果</h4><div class="prose prose-invert max-w-none p-4 bg-gray-900 rounded">${marked.parse(data.analysis)}</div>`;
+    } catch (error) {
+        resultDiv.innerHTML = `<div class="text-red-400 p-4">分析失敗: ${error.message}</div>`;
+    }
+}
+
+async function analyzePR(prNumber) {
+    const resultDiv = document.getElementById('commit-pr-analysis-result');
+    resultDiv.innerHTML = `<div class="text-center p-4">分析 PR #${prNumber} 中...</div>`;
+    try {
+        const data = await apiFetch(`/pr/repos/${currentUser}/${selectedRepo}/pulls/${prNumber}?access_token=${accessToken}`);
+        resultDiv.innerHTML = `<h4 class="text-lg font-bold mt-4 mb-2">PR #${prNumber} 分析結果</h4><div class="prose prose-invert max-w-none p-4 bg-gray-900 rounded">${marked.parse(data.pull_request_analysis)}</div>`;
+    } catch (error) {
+        resultDiv.innerHTML = `<div class="text-red-400 p-4">分析失敗: ${error.message}</div>`;
+    }
+}
+
+async function showChatScreen() {
+    let commitSelectionHtml = '';
+    try {
+        const commitsData = await apiFetch(`/repo_commit/repos/${currentUser}/${selectedRepo}?access_token=${accessToken}`);
+        commitSelectionHtml = `<label for="commit-context-select" class="text-sm text-gray-400">選擇對話上下文 (可選):</label><select id="commit-context-select" class="w-full bg-gray-600 text-white p-2 rounded mt-1 mb-2 text-sm"><option value="">使用最新 Commit</option>${commitsData.commits.slice(0, 10).map(c => `<option value="${c.sha}">[${c.sha.substring(0,7)}] ${c.name.split('\n')[0]}</option>`).join('')}</select>`;
+    } catch (error) { console.error("Failed to load commits for chat context", error); }
+    
+    const html = `<h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-teal-500 pb-2">智能問答</h2><div class="flex flex-col h-[60vh]"><div id="chat-output" class="flex-grow bg-gray-900 p-4 rounded-t-lg overflow-y-auto"></div><div class="bg-gray-700 p-4 rounded-b-lg">${commitSelectionHtml}<div class="flex"><input type="text" id="chat-input" class="flex-grow bg-gray-600 text-white rounded-l-md p-3 focus:outline-none focus:ring-2 focus:ring-teal-500" placeholder="針對選擇的 Commit 提問..."><button id="send-chat-btn" class="bg-teal-600 hover:bg-teal-500 text-white font-bold px-6 py-3 rounded-r-md">發送</button></div></div></div>`;
+    displayContent(html);
+    
+    document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
+    document.getElementById('chat-input').addEventListener('keyup', (e) => { if (e.key === 'Enter') sendChatMessage(); });
+}
+
+async function sendChatMessage() {
+    const chatInput = document.getElementById('chat-input');
+    const question = chatInput.value.trim();
+    if (!question) return;
+
+    const chatOutput = document.getElementById('chat-output');
+    chatOutput.innerHTML += `<div class="mb-2 text-right"><span class="bg-blue-600 text-white p-2 rounded-lg inline-block">${question}</span></div>`;
+    chatInput.value = '';
+    chatOutput.scrollTop = chatOutput.scrollHeight;
+    
+    const commitContextSelect = document.getElementById('commit-context-select');
+    const targetSha = commitContextSelect ? commitContextSelect.value : '';
+    const endpoint = `/chat/repos/${currentUser}/${selectedRepo}?access_token=${accessToken}&question=${encodeURIComponent(question)}&target_sha=${targetSha}`;
+    
+    try {
+        const response = await fetch(`${BACKEND_URL}${endpoint}`, { method: 'POST' });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        chatOutput.innerHTML += `<div class="mb-2"><span class="bg-gray-700 text-white p-2 rounded-lg inline-block">${marked.parse(data.answer)}</span></div>`;
+        chatOutput.scrollTop = chatOutput.scrollHeight;
+    } catch (error) {
+        chatOutput.innerHTML += `<div class="mb-2"><span class="bg-red-800 text-white p-2 rounded-lg inline-block">錯誤: ${error.message}</span></div>`;
+        chatOutput.scrollTop = chatOutput.scrollHeight;
+    }
+}
+
+// --- INITIALIZATION ---
+window.addEventListener('load', async () => {
+    await handleOAuthCallback();
+    await initializeUser();
+});
+</script>
+</body>
+</html>
+
