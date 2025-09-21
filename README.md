@@ -16,7 +16,7 @@
 | **發佈 PR 評論** | `POST` | `/pr/repos/{owner}/{repo}/pulls/{pull_number}/comments?access_token=<token>` | `{"comment": "markdown_string"}` | `{"message": "...", "comment_url": "..."}` | Body 中傳入之前獲取的分析結果 |
 | **智能問答** | `POST` | `/chat/repos/{owner}/{repo}?access_token=<token>&question=...&mode=...&target_sha=...` | 無 | `{"answer": "...", "history": [...]}` | `mode` 可為 `commit`, `repository`, `what-if` |
 
-## 5. 所需圖表
+## 所需圖表
 
 #### 1. Commit 類型分佈圖 (Doughnut Chart)
 
