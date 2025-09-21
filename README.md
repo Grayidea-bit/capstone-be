@@ -1,6 +1,6 @@
  **使用 Docker 啟動 (需先下載Docker)**：
- 
     在終端機執行以下指令，即可在背景啟動一個 Redis 容器
+    
     ```
     docker run -d --name my-redis -p 6379:6379 redis
     ```
