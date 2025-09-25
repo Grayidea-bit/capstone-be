@@ -58,12 +58,15 @@
                 </select>
             </div>
 
-            <div id="action-buttons" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div id="action-buttons" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
                 <button id="overview-btn" class="btn-action bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
                     <i class="fas fa-search mr-2"></i> 專案概覽
                 </button>
                 <button id="trends-btn" class="btn-action bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
-                    <i class="fas fa-chart-line mr-2"></i> 倉庫趨勢分析
+                    <i class="fas fa-chart-line mr-2"></i> 倉庫趨勢
+                </button>
+                <button id="tech-debt-btn" class="btn-action bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-biohazard mr-2"></i> 技術債報告
                 </button>
                 <button id="pr-btn" class="btn-action bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
                     <i class="fas fa-code-pull-request mr-2"></i> PRs / Commits
@@ -76,7 +79,7 @@
             <div id="analysis-output" class="analysis-card bg-gray-800 p-6 rounded-lg shadow-lg min-h-[400px] flex items-center justify-center">
                 <div id="initial-message" class="text-center text-gray-400">
                     <i class="fas fa-arrow-up fa-2x mb-4"></i>
-                    <p class="text-xl">請先從上方選擇一個倉庫，然後點擊功能按鈕開始分析。</p>
+                    <p class="text-xl">請先從上方選擇一個倉庫，然後點擊功能按鈕開始分析</p>
                 </div>
                  <div id="loading-spinner" class="hidden text-center">
                     <div class="spinner w-16 h-16 rounded-full border-4 border-gray-600 border-t-indigo-500 mx-auto"></div>
@@ -99,9 +102,10 @@ const repoSelect = document.getElementById('repo-select');
 
 const overviewBtn = document.getElementById('overview-btn');
 const trendsBtn = document.getElementById('trends-btn');
+const techDebtBtn = document.getElementById('tech-debt-btn');
 const prBtn = document.getElementById('pr-btn');
 const chatBtn = document.getElementById('chat-btn');
-const actionButtons = [overviewBtn, trendsBtn, prBtn, chatBtn];
+const actionButtons = [overviewBtn, trendsBtn, prBtn, chatBtn, techDebtBtn];
 
 const analysisOutput = document.getElementById('analysis-output');
 const loadingSpinner = document.getElementById('loading-spinner');
@@ -190,7 +194,7 @@ async function handleOAuthCallback() {
             localStorage.setItem('github_access_token', accessToken);
             await initializeUser();
         } catch (error) {
-            displayError('GitHub 登入失敗，請重試。');
+            displayError('GitHub 登入失敗，請重試');
         }
     }
 }
@@ -235,7 +239,7 @@ async function loadRepos() {
         hideLoading();
         initialMessage.classList.remove('hidden');
     } catch (error) {
-        displayError('無法載入您的倉庫列表。');
+        displayError('無法載入您的倉庫列表');
     }
 }
 
@@ -259,6 +263,7 @@ repoSelect.addEventListener('change', () => {
 // --- BUTTON EVENT LISTENERS ---
 overviewBtn.addEventListener('click', getOverview);
 trendsBtn.addEventListener('click', getTrends);
+techDebtBtn.addEventListener('click', getTechDebtReport);
 prBtn.addEventListener('click', showCommitPRScreen);
 chatBtn.addEventListener('click', showChatScreen);
 
@@ -284,7 +289,7 @@ async function getOverview() {
                     <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-gray-500 pb-2">
                         <i class="fas fa-folder-tree mr-2"></i>檔案結構
                     </h2>
-                    <pre class="bg-gray-900 p-4 rounded-md text-gray-300 overflow-auto h-[400px] text-sm"><code>${data.file_structure || '無法載入檔案結構。'}</code></pre>
+                    <pre class="bg-gray-900 p-4 rounded-md text-gray-300 overflow-auto h-[400px] text-sm"><code>${data.file_structure || '無法載入檔案結構'}</code></pre>
                 </div>
             </div>
         `;
@@ -362,6 +367,49 @@ async function getTrends() {
     } catch (error) {}
 }
 
+async function getTechDebtReport() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在進行全專案技術債掃描，可能需要較長時間...');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const data = await apiFetch(`/tech_debt/repos/${owner}/${repo}/tech-debt?access_token=${accessToken}`);
+
+        const topFiles = data.activity_analysis.top_files;
+        const topModules = data.activity_analysis.top_modules;
+
+        let topFilesHtml = topFiles.map(item => `<tr><td class="py-2 px-4 border-b border-gray-700">${item[0]}</td><td class="py-2 px-4 border-b border-gray-700 text-center">${item[1]}</td></tr>`).join('');
+        let topModulesHtml = topModules.map(item => `<tr><td class="py-2 px-4 border-b border-gray-700">${item[0]}</td><td class="py-2 px-4 border-b border-gray-700 text-center">${item[1]}</td></tr>`).join('');
+        
+        const html = `
+            <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-yellow-500 pb-2">
+                <i class="fas fa-biohazard mr-2"></i> 技術債分析報告
+            </h2>
+            <div class="grid grid-cols-1 lg:grid-cols-5 gap-8">
+                <div class="lg:col-span-3 prose prose-invert max-w-none text-gray-300">
+                    ${marked.parse(data.analysis)}
+                </div>
+                <div class="lg:col-span-2 space-y-6">
+                    <div>
+                        <h3 class="text-xl font-bold mb-3">最常變更的檔案 (Top 10)</h3>
+                        <table class="w-full text-left bg-gray-700 rounded-lg overflow-hidden">
+                            <thead><tr><th class="py-2 px-4 bg-gray-800">檔案路徑</th><th class="py-2 px-4 bg-gray-800 text-center">變更次數</th></tr></thead>
+                            <tbody>${topFilesHtml}</tbody>
+                        </table>
+                    </div>
+                     <div>
+                        <h3 class="text-xl font-bold mb-3">最活躍的模組 (Top 10)</h3>
+                        <table class="w-full text-left bg-gray-700 rounded-lg overflow-hidden">
+                            <thead><tr><th class="py-2 px-4 bg-gray-800">模組名稱</th><th class="py-2 px-4 bg-gray-800 text-center">變更次數</th></tr></thead>
+                            <tbody>${topModulesHtml}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+        displayContent(html);
+    } catch (error) {}
+}
+
 
 async function showCommitPRScreen() {
     if (!selectedRepoInfo.owner) return;
@@ -387,7 +435,7 @@ async function showCommitPRScreen() {
         document.querySelectorAll('.commit-analyze-btn').forEach(btn => btn.addEventListener('click', (e) => analyzeCommit(e.target.dataset.sha)));
         document.querySelectorAll('.pr-analyze-btn').forEach(btn => btn.addEventListener('click', (e) => analyzePR(e.target.dataset.prNumber)));
     } catch (error) {
-        displayError('無法獲取 Commits 或 PRs 列表。');
+        displayError('無法獲取 Commits 或 PRs 列表');
     }
 }
 
@@ -462,7 +510,6 @@ async function postPRComment(prNumber) {
     }
 }
 
-// ▼▼▼ **[修改點]** 更新 showChatScreen，加入 What-if 模式 ▼▼▼
 async function showChatScreen() {
     let commitSelectionHtml = '';
     try {

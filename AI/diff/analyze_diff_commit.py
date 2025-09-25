@@ -79,7 +79,6 @@ async def analyze_commit_diff(
             current_diff_response.raise_for_status()
             current_diff_text = current_diff_response.text
             
-            # ... (獲取前一個 commit diff 的程式碼保持不變)
             previous_diff_text = None
             previous_commit_sha = None
             previous_commit_number = None
@@ -101,7 +100,6 @@ async def analyze_commit_diff(
                         if prev_diff_response.status_code == 200:
                             previous_diff_text = prev_diff_response.text
 
-            # ... (截斷 diff 的程式碼保持不變)
             current_diff_for_prompt = current_diff_text
             if len(current_diff_for_prompt) > 60000:
                 current_diff_for_prompt = current_diff_for_prompt[:60000] + "\n... [diff 因過長已被截斷]"
@@ -110,7 +108,6 @@ async def analyze_commit_diff(
             if previous_diff_for_prompt and len(previous_diff_for_prompt) > 15000:
                 previous_diff_for_prompt = previous_diff_for_prompt[:15000] + "\n... [前一個 diff 因過長已被截斷]"
 
-            # ▼▼▼ **[修改點]** 這是本次更新的核心：全新的 AI 提示詞 ▼▼▼
             prompt = f"""
 ### **角色 (Role)**
 你是一位頂級的軟體架構師和程式碼品質專家。你的任務是進行一次深度 Code Review，不僅要理解變更的意圖，更要評估其品質和潛在風險。

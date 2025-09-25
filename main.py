@@ -6,6 +6,7 @@ from AI.diff.analyze_diff_commit import diff_router
 from AI.overview.analyze_overview import overview_router
 from AI.pr.analyze_pr import pr_router
 from AI.trends.analyze_trends import trends_router
+from AI.tech_debt.analyze_debt import tech_debt_router # 新增
 from github_login.login import login_router
 from github_info.get_repo_commit import repo_commit_router
 from github_info.get_repo_list import repo_list_router
@@ -25,6 +26,7 @@ app.include_router(overview_router, prefix="/overview", tags=["專案概覽 (Ove
 app.include_router(pr_router, prefix="/pr", tags=["Pull Request 分析"])
 app.include_router(pr_list_router, prefix="/pr", tags=["獲取 PRs"])
 app.include_router(trends_router, prefix="/trends", tags=["倉庫趨勢分析 (Trends)"])
+app.include_router(tech_debt_router, prefix="/tech_debt", tags=["技術債分析 (Technical Debt)"]) # 新增
 app.include_router(login_router, prefix="/login", tags=["GitHub 登入"])
 app.include_router(repo_commit_router, prefix="/repo_commit", tags=["獲取 Commits"])
 app.include_router(repo_list_router, prefix="/repo_list", tags=["獲取 Repos"])
