@@ -12,9 +12,11 @@ from ..setting import (
     MAX_CHARS_PER_PREV_FILE,
     logger,
     redis_client,
+    CACHE_TTL_SECONDS # 確保導入
 )
-from ..code_analyzer import CodeAnalyzer # 導入新的分析器
+from ..code_analyzer import CodeAnalyzer
 import json
+import hashlib # 導入 hashlib
 
 chat_router = APIRouter()
 
@@ -32,8 +34,7 @@ def set_conversation_history(history_key: str, history: list):
     if not redis_client:
         return
     try:
-        # 只保留最近 5 次對話紀錄
-        redis_client.set(history_key, json.dumps(history[-5:]), ex=3600)
+        redis_client.set(history_key, json.dumps(history[-10:]), ex=3600) # 增加歷史紀錄到 10 則
     except Exception as e:
         logger.error(f"寫入對話歷史快取失敗: {e}", extra={"history_key": history_key})
 
@@ -65,16 +66,49 @@ async def chat_with_repo(
             if not commits_data:
                 return {"answer": "抱歉，這個倉庫目前沒有任何提交記錄，無法回答您的問題。", "history": []}
 
-            # 建立共用的分析器實例
             analyzer = CodeAnalyzer(owner, repo, access_token, client)
+            
+            # ***** 主要修改點：新增問答快取邏輯 *****
+            cache_key = None
+            question_hash = hashlib.md5(question.encode()).hexdigest()
 
-            # 根據模式選擇不同的處理邏輯
+            if mode == "repository":
+                latest_commit_sha = commits_data[0]['sha']
+                cache_key = f"chat:repository:{owner}/{repo}:{latest_commit_sha}:{question_hash}"
+            elif mode == "commit":
+                sha_to_use = target_sha or commits_data[0]['sha']
+                cache_key = f"chat:commit:{owner}/{repo}:{sha_to_use}:{question_hash}"
+
+            if cache_key and redis_client:
+                try:
+                    cached_result = redis_client.get(cache_key)
+                    if cached_result:
+                        logger.info(f"智能問答快取命中: {cache_key}")
+                        answer_text = json.loads(cached_result)
+                        # 即使快取命中，依然要更新對話歷史
+                        history_key = f"chat_history:{owner}/{repo}/{access_token[:10]}"
+                        conversation_history = get_conversation_history(history_key)
+                        conversation_history.append({"question": question, "answer": answer_text})
+                        set_conversation_history(history_key, conversation_history)
+                        return {"answer": answer_text, "history": conversation_history}
+                except Exception as e:
+                    logger.error(f"讀取智能問答快取失敗: {e}", extra={"cache_key": cache_key})
+            # ***********************************
+
             if mode == "repository":
                 answer_text = await handle_repository_qa(analyzer, question)
             elif mode == "what-if":
                 answer_text = await handle_what_if_qa(analyzer, question)
             else: # mode == "commit"
                 answer_text = await handle_commit_qa(owner, repo, access_token, question, target_sha, commit_map, commits_data, client)
+
+            # 將新結果存入快取
+            if cache_key and redis_client:
+                try:
+                    redis_client.set(cache_key, json.dumps(answer_text), ex=CACHE_TTL_SECONDS)
+                    logger.info(f"已快取智能問答結果: {cache_key}")
+                except Exception as e:
+                    logger.error(f"寫入智能問答快取失敗: {e}", extra={"cache_key": cache_key})
 
             history_key = f"chat_history:{owner}/{repo}/{access_token[:10]}"
             conversation_history = get_conversation_history(history_key)
@@ -92,6 +126,7 @@ async def chat_with_repo(
             logger.error(f"處理對話時發生意外錯誤: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"處理對話時發生意外錯誤: {str(e)}")
 
+# 以下的 handle_what_if_qa, handle_repository_qa, handle_commit_qa 函式維持不變
 async def handle_what_if_qa(analyzer: CodeAnalyzer, question: str):
     logger.info("進入 What-if 場景模擬模式")
 

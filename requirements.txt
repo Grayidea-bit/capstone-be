@@ -6,3 +6,4 @@ google-generativeai
 tenacity
 redis
 python-json-logger
+radon

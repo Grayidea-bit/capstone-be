@@ -1,0 +1,62 @@
+# .github/workflows/auto_pr_review.yml
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: AI Code Review
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pr_number = pr.number;
+
+            // 重要：請將 YOUR_API_ENDPOINT 替換成您部署後服務的公開網址
+            const api_endpoint = `https://YOUR_API_ENDPOINT/pr/repos/${owner}/${repo}/pulls/${pr_number}`;
+            
+            // 重要：請將您的服務 Access Token 設定在 GitHub Repo 的 Secrets 中，並命名為 API_ACCESS_TOKEN
+            const access_token = "${{ secrets.API_ACCESS_TOKEN }}";
+
+            const url = `${api_endpoint}?access_token=${access_token}`;
+
+            try {
+              const response = await fetch(url, { method: 'GET' });
+              const data = await response.json();
+
+              if (!response.ok) {
+                throw new Error(`API Error: ${response.status} ${data.detail || ''}`);
+              }
+              
+              const analysis = data.pull_request_analysis;
+              const comment_body = `### 🤖 AI Code Review 報告\n\n${analysis}`;
+
+              // 發佈評論到 PR
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr_number,
+                body: comment_body,
+              });
+
+            } catch (error) {
+              const error_comment = `### 🤖 AI Code Review 失敗\n\n無法完成自動化程式碼審查，原因如下：\n\`\`\`\n${error.message}\n\`\`\``;
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr_number,
+                body: error_comment,
+              });
+              // 讓 Action 失敗以提示錯誤
+              core.setFailed(error.message);
+            }

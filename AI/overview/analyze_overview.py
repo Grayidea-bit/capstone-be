@@ -19,16 +19,6 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
     if not access_token:
         raise HTTPException(status_code=401, detail="缺少 Access Token。")
 
-    cache_key = f"overview:{owner}/{repo}"
-    if redis_client:
-        try:
-            cached_result = redis_client.get(cache_key)
-            if cached_result:
-                logger.info(f"專案概覽快取命中: {cache_key}")
-                return json.loads(cached_result)
-        except Exception as e:
-            logger.error(f"讀取 Redis 快取時發生錯誤: {e}", extra={"cache_key": cache_key})
-
     logger.info(
         f"收到倉庫概覽請求: {owner}/{repo}",
         extra={"owner": owner, "repo": repo},
@@ -45,6 +35,19 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
                 raise HTTPException(
                     status_code=404, detail="倉庫中沒有 commits，無法生成概覽。"
                 )
+
+            # ***** 主要修改點：新增頂層快取 *****
+            latest_commit_sha = commits_data[0]["sha"]
+            cache_key = f"overview:{owner}/{repo}:{latest_commit_sha}"
+            if redis_client:
+                try:
+                    cached_result = redis_client.get(cache_key)
+                    if cached_result:
+                        logger.info(f"專案概覽快取命中: {cache_key}")
+                        return json.loads(cached_result)
+                except Exception as e:
+                    logger.error(f"讀取專案概覽快取失敗: {e}", extra={"cache_key": cache_key})
+            # ***********************************
 
             readme_content = ""
             try:
@@ -66,7 +69,6 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
                  if e.response.status_code != 404:
                     logger.warning(f"獲取 README 時發生 HTTP 錯誤 (非 404): {str(e)}")
             
-            latest_commit_sha = commits_data[0]["sha"]
             tree_response = await client.get(
                 f"https://api.github.com/repos/{owner}/{repo}/git/trees/{latest_commit_sha}?recursive=1",
                 headers={"Authorization": f"Bearer {access_token}"}
@@ -119,12 +121,14 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
                 "file_structure": file_structure_text 
             }
 
+            # ***** 主要修改點：將結果存入快取 *****
             if redis_client:
                 try:
                     redis_client.set(cache_key, json.dumps(result), ex=CACHE_TTL_SECONDS)
                     logger.info(f"已快取專案概覽: {cache_key}")
                 except Exception as e:
-                    logger.error(f"寫入 Redis 快取失敗: {e}", extra={"cache_key": cache_key})
+                    logger.error(f"寫入專案概覽快取失敗: {e}", extra={"cache_key": cache_key})
+            # ***********************************
 
             return result
             

@@ -3,15 +3,15 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import List, Dict
 import httpx
 from collections import Counter
-import json # 導入 json
+import json
 
 from ..setting import (
     validate_github_token,
     get_commit_number_and_list,
     generate_ai_content,
     logger,
-    redis_client,       # 導入 redis_client
-    CACHE_TTL_SECONDS   # 導入 CACHE_TTL_SECONDS
+    redis_client,
+    CACHE_TTL_SECONDS
 )
 
 trends_router = APIRouter()
@@ -55,6 +55,20 @@ async def get_repository_trends(
         _, commits_data = await get_commit_number_and_list(owner, repo, access_token)
         if not commits_data:
             raise HTTPException(status_code=404, detail="倉庫中沒有 commits，無法進行分析。")
+
+        # ***** 主要修改點：新增頂層快取 *****
+        latest_commit_sha = commits_data[0]['sha']
+        cache_key = f"trends_analysis:{owner}/{repo}:{latest_commit_sha}:{limit}"
+
+        if redis_client:
+            try:
+                cached_result = redis_client.get(cache_key)
+                if cached_result:
+                    logger.info(f"倉庫趨勢分析快取命中: {cache_key}")
+                    return json.loads(cached_result)
+            except Exception as e:
+                logger.error(f"讀取倉庫趨勢分析快取失敗: {e}", extra={"cache_key": cache_key})
+        # ***********************************
 
         recent_commits = commits_data[:limit]
         commit_summary = []
@@ -106,12 +120,23 @@ async def get_repository_trends(
         
         activity_analysis_data = await analyze_file_activity(owner, repo, access_token, commits_data)
 
-        return {
+        result = {
             "trends_analysis": analysis_text,
             "statistics": category_counts,
             "commit_count": len(recent_commits),
             "activity_analysis": activity_analysis_data 
         }
+
+        # ***** 主要修改點：將結果存入快取 *****
+        if redis_client:
+            try:
+                redis_client.set(cache_key, json.dumps(result), ex=CACHE_TTL_SECONDS)
+                logger.info(f"已快取倉庫趨勢分析結果: {cache_key}")
+            except Exception as e:
+                logger.error(f"寫入倉庫趨勢分析快取失敗: {e}", extra={"cache_key": cache_key})
+        # ***********************************
+
+        return result
 
     except HTTPException as e:
         raise e
@@ -123,10 +148,8 @@ async def get_repository_trends(
 async def analyze_file_activity(owner: str, repo: str, access_token: str, commits_data: list, limit: int = 200):
     """分析最近 N 個 commit 的檔案和模組修改頻率，並加入快取機制"""
     
-    # --- 新增快取邏輯 ---
-    # 使用最新的 commit SHA 作為快取鍵的一部分，確保有新 commit 時快取會失效
     latest_commit_sha = commits_data[0]['sha']
-    cache_key = f"activity_analysis:{owner}/{repo}:{latest_commit_sha}"
+    cache_key = f"activity_analysis:{owner}/{repo}:{latest_commit_sha}:{limit}"
 
     if redis_client:
         try:
@@ -136,7 +159,6 @@ async def analyze_file_activity(owner: str, repo: str, access_token: str, commit
                 return json.loads(cached_result)
         except Exception as e:
             logger.error(f"讀取活躍度分析快取失敗: {e}", extra={"cache_key": cache_key})
-    # --- 快取邏輯結束 ---
 
     logger.info(f"開始對 {owner}/{repo} 進行檔案活躍度分析，分析最近 {limit} 筆 commits。")
     
@@ -144,6 +166,7 @@ async def analyze_file_activity(owner: str, repo: str, access_token: str, commit
     all_changed_files = []
 
     async with httpx.AsyncClient() as client:
+        # (此處的程式碼維持不變)
         for i, commit in enumerate(commits_to_analyze):
             sha = commit["sha"]
             logger.debug(f"正在獲取 commit #{i+1} ({sha[:7]}) 的檔案變更...")
@@ -166,7 +189,8 @@ async def analyze_file_activity(owner: str, repo: str, access_token: str, commit
     
     module_counts = Counter()
     for file_path, count in file_counts.items():
-        module_name = file_path.split('/')[0]
+        # 修正了潛在的 bug，確保即使檔案在根目錄也能正確處理
+        module_name = file_path.split('/')[0] if '/' in file_path else file_path
         if module_name:
             module_counts[module_name] += count
 
@@ -214,13 +238,11 @@ async def analyze_file_activity(owner: str, repo: str, access_token: str, commit
         "top_modules": module_counts.most_common(10)
     }
 
-    # --- 新增寫入快取邏輯 ---
     if redis_client:
         try:
             redis_client.set(cache_key, json.dumps(result), ex=CACHE_TTL_SECONDS)
             logger.info(f"已快取檔案活躍度分析結果: {cache_key}")
         except Exception as e:
             logger.error(f"寫入活躍度分析快取失敗: {e}", extra={"cache_key": cache_key})
-    # --- 快取邏輯結束 ---
     
     return result

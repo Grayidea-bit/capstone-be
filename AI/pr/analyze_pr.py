@@ -7,11 +7,13 @@ from ..setting import (
     generate_ai_content,
     MAX_CHARS_PR_DIFF,
     logger,
+    redis_client,      # 確保導入
+    CACHE_TTL_SECONDS  # 確保導入
 )
+import json # 確保導入
 
 pr_router = APIRouter()
 
-# [新功能] 專門用來發佈評論的函式
 async def post_comment_to_github_pr(
     owner: str,
     repo: str,
@@ -35,14 +37,12 @@ async def post_comment_to_github_pr(
             logger.error(
                 f"發佈評論到 PR #{pull_number} 時發生 GitHub API 錯誤: {e.response.text}",
             )
-            # 將 GitHub 的錯誤直接拋出給前端
             raise HTTPException(status_code=e.response.status_code, detail=f"GitHub API Error: {e.response.text}")
         except Exception as e:
             logger.error(f"發佈評論到 PR #{pull_number} 時發生意外錯誤: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail="發佈評論時發生未知錯誤")
 
 
-# [修改] 原有的分析函式，移除發佈評論的邏輯
 @pr_router.get("/repos/{owner}/{repo}/pulls/{pull_number}")
 async def analyze_pr_diff(
     owner: str,
@@ -60,13 +60,29 @@ async def analyze_pr_diff(
 
     async with httpx.AsyncClient() as client:
         try:
-            # ... (此處的程式碼與之前相同，用於獲取 PR 資訊和 diff)
             pr_info_response = await client.get(
                 f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             pr_info_response.raise_for_status()
             pr_data = pr_info_response.json()
+            
+            # ***** 主要修改點：獲取 head SHA 並建立快取鍵 *****
+            pr_head_sha = pr_data.get("head", {}).get("sha")
+            if not pr_head_sha:
+                raise HTTPException(status_code=404, detail="無法獲取 PR 的 head SHA。")
+
+            cache_key = f"pr_analysis:{owner}/{repo}:{pull_number}:{pr_head_sha}"
+            if redis_client:
+                try:
+                    cached_result = redis_client.get(cache_key)
+                    if cached_result:
+                        logger.info(f"PR 分析快取命中: {cache_key}")
+                        return json.loads(cached_result)
+                except Exception as e:
+                    logger.error(f"讀取 PR 分析快取失敗: {e}", extra={"cache_key": cache_key})
+            # *************************************************
+
             pr_title = pr_data.get("title", "")
             pr_body = pr_data.get("body", "")
             
@@ -119,7 +135,18 @@ async def analyze_pr_diff(
 """
             analysis_text = await generate_ai_content(prompt)
             
-            return {"pull_request_analysis": analysis_text}
+            result = {"pull_request_analysis": analysis_text}
+
+            # ***** 主要修改點：將結果存入快取 *****
+            if redis_client:
+                try:
+                    redis_client.set(cache_key, json.dumps(result), ex=CACHE_TTL_SECONDS)
+                    logger.info(f"已快取 PR 分析結果: {cache_key}")
+                except Exception as e:
+                    logger.error(f"寫入 PR 分析快取失敗: {e}", extra={"cache_key": cache_key})
+            # ***********************************
+
+            return result
 
         except httpx.HTTPStatusError as e:
             detail = f"因 GitHub API 錯誤，無法分析 PR: {e.response.status_code} - {e.response.text}"
@@ -128,7 +155,7 @@ async def analyze_pr_diff(
             logger.error(f"分析 PR 時發生意外錯誤: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"分析 PR 時發生意外錯誤: {str(e)}")
 
-# **[新功能]** 新增一個 POST 路由來處理發佈評論的請求
+
 @pr_router.post("/repos/{owner}/{repo}/pulls/{pull_number}/comments")
 async def post_pr_comment(
     owner: str,
