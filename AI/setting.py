@@ -16,9 +16,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 logHandler = logging.StreamHandler()
-formatter = jsonlogger.JsonFormatter(
-    "%(asctime)s %(name)s %(levelname)s %(message)s"
-)
+formatter = jsonlogger.JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
 logHandler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(logHandler)
@@ -80,7 +78,10 @@ async def validate_github_token(access_token: str) -> bool:
                 user_info = response.json()
                 logger.info(
                     "GitHub token 驗證成功。",
-                    extra={"user": user_info.get("login"), "token_prefix": access_token[:5]},
+                    extra={
+                        "user": user_info.get("login"),
+                        "token_prefix": access_token[:5],
+                    },
                 )
                 return True
             else:
@@ -151,8 +152,7 @@ async def get_commit_number_and_list(
         return {}, []
 
     commit_map = {
-        commit["sha"]: i
-        for i, commit in enumerate(reversed(all_commits_fetched), 1)
+        commit["sha"]: i for i, commit in enumerate(reversed(all_commits_fetched), 1)
     }
 
     if redis_client:
@@ -163,7 +163,9 @@ async def get_commit_number_and_list(
             redis_client.set(
                 cache_key_map, json.dumps(commit_map), ex=CACHE_TTL_SECONDS
             )
-            logger.info(f"成功為 {owner}/{repo} 快取了 {len(all_commits_fetched)} 個 commits。")
+            logger.info(
+                f"成功為 {owner}/{repo} 快取了 {len(all_commits_fetched)} 個 commits。"
+            )
         except redis.exceptions.RedisError as e:
             logger.error(f"寫入 Redis 快取時發生錯誤: {e}")
 
@@ -205,7 +207,9 @@ async def generate_ai_content(prompt_text: str) -> str:
             data = response.json()
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if not content:
-                logger.error("Perplexity API 返回了空的回應。", extra={"response_data": data})
+                logger.error(
+                    "Perplexity API 返回了空的回應。", extra={"response_data": data}
+                )
                 raise HTTPException(status_code=500, detail="AI 服務返回了空的回應。")
             logger.info(
                 "成功從 Perplexity API 獲取回應。",
@@ -217,11 +221,14 @@ async def generate_ai_content(prompt_text: str) -> str:
                 f"Perplexity API 錯誤: {e.response.status_code} - {e.response.text}"
             )
             raise HTTPException(
-                status_code=e.response.status_code, detail=f"AI 服務錯誤: {e.response.text}"
+                status_code=e.response.status_code,
+                detail=f"AI 服務錯誤: {e.response.text}",
             )
         except httpx.TimeoutException as e:
             logger.error(f"呼叫 Perplexity API 時發生超時錯誤: {str(e)}")
             raise HTTPException(status_code=504, detail="AI 服務請求超時。")
         except Exception as e:
             logger.error(f"呼叫 Perplexity API 時發生意外錯誤: {str(e)}", exc_info=True)
-            raise HTTPException(status_code=500, detail="與 AI 服務通訊時發生意外錯誤。")
+            raise HTTPException(
+                status_code=500, detail="與 AI 服務通訊時發生意外錯誤。"
+            )
