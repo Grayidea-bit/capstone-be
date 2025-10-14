@@ -58,7 +58,7 @@
                 </select>
             </div>
 
-            <div id="action-buttons" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+            <div id="action-buttons" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 mb-8">
                 <button id="overview-btn" class="btn-action bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
                     <i class="fas fa-search mr-2"></i> 專案概覽
                 </button>
@@ -67,6 +67,12 @@
                 </button>
                 <button id="tech-debt-btn" class="btn-action bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
                     <i class="fas fa-biohazard mr-2"></i> 技術債報告
+                </button>
+                <button id="contribution-btn" class="btn-action bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-users mr-2"></i> 貢獻者分析
+                </button>
+                <button id="branch-btn" class="btn-action bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-users mr-2"></i> 取得分支
                 </button>
                 <button id="pr-btn" class="btn-action bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
                     <i class="fas fa-code-pull-request mr-2"></i> PRs / Commits
@@ -105,7 +111,9 @@ const trendsBtn = document.getElementById('trends-btn');
 const techDebtBtn = document.getElementById('tech-debt-btn');
 const prBtn = document.getElementById('pr-btn');
 const chatBtn = document.getElementById('chat-btn');
-const actionButtons = [overviewBtn, trendsBtn, prBtn, chatBtn, techDebtBtn];
+const contributionBtn = document.getElementById('contribution-btn'); 
+const branchBtn = document.getElementById('branch-btn');
+const actionButtons = [overviewBtn, trendsBtn, prBtn, chatBtn, techDebtBtn, contributionBtn, branchBtn];
 
 const analysisOutput = document.getElementById('analysis-output');
 const loadingSpinner = document.getElementById('loading-spinner');
@@ -266,8 +274,126 @@ trendsBtn.addEventListener('click', getTrends);
 techDebtBtn.addEventListener('click', getTechDebtReport);
 prBtn.addEventListener('click', showCommitPRScreen);
 chatBtn.addEventListener('click', showChatScreen);
+contributionBtn.addEventListener('click', getContributions);
+branchBtn.addEventListener('click', getBranches);
 
 // --- ANALYSIS FUNCTIONS ---
+
+async function getContributions() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在分析所有分支的貢獻者... 這可能需要一些時間。');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const data = await apiFetch(`/contributions/repos/${owner}/${repo}/contributions?access_token=${accessToken}`);
+        
+        // 將物件轉換為陣列並排序
+        const contributors = Object.entries(data).sort((a, b) => b[1] - a[1]);
+        const labels = contributors.map(c => c[0]);
+        const values = contributors.map(c => c[1]);
+
+        const html = `
+            <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-orange-500 pb-2">
+                <i class="fas fa-users mr-2"></i> 倉庫貢獻者分析 (所有分支)
+            </h2>
+            <p class="text-gray-400 mb-6">此圖表顯示了在所有分支中，每位貢獻者的總 Commit 次數。</p>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <canvas id="contribution-chart"></canvas>
+            </div>
+        `;
+        displayContent(html);
+
+        const ctx = document.getElementById('contribution-chart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Commit 次數',
+                    data: values,
+                    backgroundColor: 'rgba(234, 88, 12, 0.6)',
+                    borderColor: 'rgba(234, 88, 12, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y', // 讓長條圖變為水平
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    title: {
+                        display: true,
+                        text: '貢獻者 Commit 次數排行榜',
+                        color: '#F9FAFB',
+                        font: { size: 18 }
+                    }
+                },
+                scales: {
+                    x: { ticks: { color: '#D1D5DB' } },
+                    y: { ticks: { color: '#D1D5DB' } }
+                }
+            }
+        });
+
+    } catch (error) {
+        // 如果 API 返回的是 object 且包含 detail，則顯示 detail
+        if (error.message && error.message.includes('detail')) {
+            try {
+                const errorObj = JSON.parse(error.message);
+                displayError(errorObj.detail || '分析貢獻者時發生未知錯誤');
+            } catch (e) {
+                displayError(error.message);
+            }
+        } else {
+            displayError(error.message);
+        }
+    }
+}
+
+async function getBranches() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在取得分支列表...');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        // Assuming your FastAPI router is mounted at '/branch'
+        const data = await apiFetch(`/branches/${owner}/${repo}?access_token=${accessToken}`);
+        
+        let html;
+
+        if (data && data.branches && data.branches.length > 0) {
+            const branchListItems = data.branches.map(branch => `
+                <li class="bg-gray-700 p-3 rounded-md flex items-center shadow">
+                    <i class="fas fa-code-branch text-cyan-400 mr-3"></i>
+                    <span class="font-mono text-gray-200">${branch}</span>
+                </li>
+            `).join('');
+
+            html = `
+                <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-cyan-500 pb-2">
+                    <i class="fas fa-code-branch mr-2"></i> 倉庫分支列表
+                </h2>
+                <ul class="space-y-3">
+                    ${branchListItems}
+                </ul>
+            `;
+        } else {
+            html = `
+                <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-cyan-500 pb-2">
+                    <i class="fas fa-code-branch mr-2"></i> 倉庫分支列表
+                </h2>
+                <p class="text-gray-400">此倉庫中沒有找到任何分支，或倉庫是空的。</p>
+            `;
+        }
+        
+        displayContent(html);
+
+    } catch (error) {
+        // The apiFetch function already handles displaying the error message.
+        // You can add extra logging here if needed.
+        console.error("Error fetching branches:", error);
+    }
+}
+
+
 async function getOverview() {
     if (!selectedRepoInfo.owner) return;
     showLoading();
