@@ -18,101 +18,14 @@ class CodeAnalyzer:
     """
 
     def __init__(
-        self, owner: str, repo: str, access_token: str, client: httpx.AsyncClient
+        self, owner: str, repo: str, branch:str, access_token: str, client: httpx.AsyncClient
     ):
         self.owner = owner
         self.repo = repo
+        self.branch = branch
         self.access_token = access_token
         self.client = client
-        # 快取鍵現在包含 commit SHA，以實現更細緻的快取
-        self.latest_commit_sha = None
-
-    async def _get_latest_commit_sha(self) -> str:
-        """獲取最新的 commit SHA 並緩存結果"""
-        if self.latest_commit_sha:
-            return self.latest_commit_sha
-
-        # 嘗試從 Redis 快取獲取最新的 commit SHA
-        cache_key = f"latest_commit_sha:{self.owner}/{self.repo}"
-        if redis_client:
-            try:
-                cached_sha = redis_client.get(cache_key)
-                if cached_sha:
-                    logger.info(f"從快取中獲取最新的 commit SHA: {cached_sha[:7]}")
-                    self.latest_commit_sha = cached_sha
-                    return cached_sha
-            except Exception as e:
-                logger.error(f"讀取最新 commit SHA 快取失敗: {e}")
-
-        response = await self.client.get(
-            f"https://api.github.com/repos/{self.owner}/{self.repo}/commits",
-            headers={"Authorization": f"Bearer {self.access_token}"},
-            params={"per_page": 1},
-        )
-        response.raise_for_status()
-        latest_sha = response.json()[0]["sha"]
-        self.latest_commit_sha = latest_sha
-
-        # 將最新的 commit SHA 存入 Redis 快取
-        if redis_client:
-            try:
-                # 設定一個較短的過期時間，例如 5 分鐘，以確保能及時獲取到最新的 commit
-                redis_client.set(cache_key, latest_sha, ex=300)
-            except Exception as e:
-                logger.error(f"寫入最新 commit SHA 快取失敗: {e}")
-
-        return latest_sha
-
-    async def get_all_py_files(self) -> List[str]:
-        """
-        獲取程式碼庫中所有的 .py 檔案路徑列表，並進行快取。
-        快取現在與最新的 commit SHA 綁定。
-        """
-        latest_commit_sha = await self._get_latest_commit_sha()
-        cache_key_file_list = (
-            f"code_analyzer:file_list:{self.owner}/{self.repo}:{latest_commit_sha}"
-        )
-
-        if redis_client:
-            try:
-                cached_files = redis_client.get(cache_key_file_list)
-                print(f"*******************{cached_files}*************************")
-                if cached_files:
-                    logger.info(
-                        f"從快取中獲取檔案列表 (commit: {latest_commit_sha[:7]})"
-                    )
-                    return json.loads(cached_files)
-            except Exception as e:
-                logger.error(f"讀取檔案列表快取失敗: {e}")
-
-        logger.info(
-            f"正在為 {self.owner}/{self.repo} (commit: {latest_commit_sha[:7]}) 獲取檔案列表..."
-        )
-        tree_response = await self.client.get(
-            f"https://api.github.com/repos/{self.owner}/{self.repo}/git/trees/{latest_commit_sha}?recursive=1",
-            headers={"Authorization": f"Bearer {self.access_token}"},
-        )
-        tree_response.raise_for_status()
-        tree_data = tree_response.json()
-
-        py_files = [
-            item["path"]
-            for item in tree_data.get("tree", [])
-            if item.get("type") == "blob" and item["path"].endswith(".py")
-        ]
-
-        if redis_client:
-            try:
-                # 檔案列表與 commit SHA 綁定，可以設定較長的過期時間
-                redis_client.set(
-                    cache_key_file_list, json.dumps(py_files), ex=CACHE_TTL_SECONDS
-                )
-                logger.info(f"已快取檔案列表 (commit: {latest_commit_sha[:7]})")
-            except Exception as e:
-                logger.error(f"寫入檔案列表快取失敗: {e}")
-
-        return py_files
-
+        
     async def get_files_content(
         self, file_paths: List[str], ref: str = None
     ) -> Dict[str, str]:
@@ -120,12 +33,20 @@ class CodeAnalyzer:
         獲取指定檔案路徑列表的內容，優先從快取讀取。
         可以指定 ref (commit SHA, branch, tag) 來獲取特定版本的檔案內容。
         """
+        
+        response = await self.client.get(
+            f"https://api.github.com/repos/{self.owner}/{self.repo}/commits",
+            headers={"Authorization": f"Bearer {self.access_token}"},
+            params={"per_page": 1,"sha":self.branch},
+        )
+        response.raise_for_status()
+        commit_sha_to_use = response.json()[0]["sha"]
+        
         files_content_map = {}
-        commit_sha_to_use = ref if ref else await self._get_latest_commit_sha()
 
         for file_path in file_paths:
             # 快取鍵包含 commit SHA，實現版本化快取
-            content_cache_key = f"code_analyzer:file_content:{self.owner}/{self.repo}:{commit_sha_to_use}:{file_path}"
+            content_cache_key = f"code_analyzer:file_content:{self.owner}/{self.repo}/{self.branch}:{commit_sha_to_use}:{file_path}"
 
             if redis_client:
                 try:
@@ -149,6 +70,7 @@ class CodeAnalyzer:
                         "Authorization": f"Bearer {self.access_token}",
                         "Accept": "application/vnd.github.raw",
                     },
+                    params={"ref":self.branch}
                 )
                 if file_content_res.status_code == 200:
                     content = file_content_res.text
@@ -168,7 +90,7 @@ class CodeAnalyzer:
 
         return files_content_map
 
-    async def file_embedding_similar(self, user_question: str, branch_name="main"):
+    async def file_embedding_similar(self, user_question: str):
         CHUNK_TOKEN = 512
         overlap_part = 10
         tokenizer = AutoTokenizer.from_pretrained("jinaai/jina-embeddings-v2-base-code")
@@ -182,7 +104,7 @@ class CodeAnalyzer:
         }
 
         cache_key_embedding_filelist = (
-            f"code_analyzer:embedding_filelist:{self.owner}/{self.repo}/{branch_name}"
+            f"code_analyzer:embedding_filelist:{self.owner}/{self.repo}/{self.branch}"
         )
         content_embedding = {}
         try:
@@ -198,16 +120,16 @@ class CodeAnalyzer:
                     }
 
                 else:
-                    branch_info_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/branches/{branch_name}"
+                    branch_info_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/branches/{self.branch}"
                     branch_info_res = await self.client.get(
                         branch_info_url, headers=headers
                     )
                     branch_info_res.raise_for_status()
-                    latest_commit_sha = branch_info_res.json()["commit"]["sha"]
+                    branch_commit_sha = branch_info_res.json()["commit"]["sha"]
 
-                    commit_info_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/git/commits/{latest_commit_sha}"
+                    commit_info_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/git/commits/{branch_commit_sha}"
                     commit_info_res = await self.client.get(
-                        commit_info_url, headers=headers
+                        commit_info_url, headers=headers,params={"per_page": 1}
                     )
                     commit_info_res.raise_for_status()
                     tree_sha = commit_info_res.json()["tree"]["sha"]
@@ -230,21 +152,51 @@ class CodeAnalyzer:
                             or item["path"].endswith("jpeg")
                         )
                     ]
-
+                    
+                    allowed_language = {
+                            ".asm",      # Assembly
+                            ".bat",      # Batchfile
+                            ".c",        # C
+                            ".cs",       # C#
+                            ".cpp", ".cc", ".cxx",  # C++
+                            ".cmake",    # CMake
+                            ".css",      # CSS
+                            ".f90", ".f", ".for",   # FORTRAN
+                            ".go",       # Go
+                            ".hs",       # Haskell
+                            ".html", ".htm",  # HTML
+                            ".java",     # Java
+                            ".js",       # JavaScript
+                            ".jl",       # Julia
+                            ".lua",      # Lua
+                            ".md",       # Markdown
+                            ".php",      # PHP
+                            ".pl",       # Perl
+                            ".ps1",      # PowerShell
+                            ".py",       # Python
+                            ".rb",       # Ruby
+                            ".rs",       # Rust
+                            ".sql",      # SQL
+                            ".scala",    # Scala
+                            ".sh",       # Shell
+                            ".ts",       # TypeScript
+                            ".tex",      # TeX
+                            ".vb",       # Visual Basic
+                        }
                     for path in file_paths:
-                        print(path)
-                        if path == "README.md" or path == ".env":
+                        if not path.endswith(tuple(allowed_language)):
                             continue
                         content_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/contents/{path}"
 
                         content_res = await self.client.get(
-                            content_url, headers=headers
+                            content_url, headers=headers,params={"ref": self.branch}
                         )
                         content_res.raise_for_status()
                         content = content_res.json()
                         decoded_text = base64.b64decode(content["content"]).decode(
                             "utf-8"
                         )
+                        print(f"===================={path}=======================")
 
                         # Chunk part
                         temp = decoded_text.split("\n")
@@ -286,6 +238,7 @@ class CodeAnalyzer:
             readme_response = await self.client.get(
                 f"https://api.github.com/repos/{self.owner}/{self.repo}/readme",
                 headers=headers,
+                params={"sha": self.branch}
             )
             readme_content = ""
             if readme_response.status_code == 200:
@@ -336,17 +289,15 @@ class CodeAnalyzer:
                 similar = cosine_similarity(
                     question_embedding.reshape(1, -1), v.reshape(1, -1)
                 )
-                print(file_labels[index])
-                print(similar)
                 if similar > max_similar:
                     max_similar = similar
                     max_filename = file_labels[index]
-            print()
+                    
             print(max_filename)
             print(max_similar)
 
             content_url = f"https://api.github.com/repos/{self.owner}/{self.repo}/contents/{max_filename}"
-            content_res = await self.client.get(content_url, headers=headers)
+            content_res = await self.client.get(content_url, headers=headers,params={"ref": self.branch})
             content_res.raise_for_status()
             content = content_res.json()
             decoded_text = base64.b64decode(content["content"]).decode("utf-8")

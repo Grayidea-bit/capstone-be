@@ -9,8 +9,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-@repo_commit_router.get("/repos/{owner}/{repo}")
-async def get_commits(owner: str, repo: str, access_token: str = Query(None)):
+@repo_commit_router.get("/repos/{owner}/{repo}/{branch}")
+async def get_commits(owner: str, repo: str,branch:str, access_token: str = Query(None)):
     if not access_token:
         logger.error("在獲取倉庫提交記錄請求中未提供 Access token。")
         raise HTTPException(status_code=401, detail="Access token is missing.")
@@ -21,9 +21,9 @@ async def get_commits(owner: str, repo: str, access_token: str = Query(None)):
             "Accept": "application/vnd.github.v3+json",
         }
         url = f"https://api.github.com/repos/{owner}/{repo}/commits"
-
+        
         try:
-            response = await client.get(url, headers=headers)
+            response = await client.get(url, headers=headers,params={"sha":branch})
             response.raise_for_status()  # 如果狀態碼是 4xx 或 5xx，會拋出例外
 
             commits_data = response.json()

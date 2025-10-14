@@ -35,9 +35,9 @@ def classify_commit(message: str) -> str:
     return "其他"
 
 
-@trends_router.get("/repos/{owner}/{repo}/trends")
+@trends_router.get("/repos/{owner}/{repo}/{branch}/trends")
 async def get_repository_trends(
-    owner: str, repo: str, access_token: str = Query(None), limit: int = Query(50, ge=1, le=100)
+    owner: str, repo: str,branch:str, access_token: str = Query(None), limit: int = Query(50, ge=1, le=100)
 ):
     """分析最近 commit 的類型分佈"""
     if not access_token:
@@ -52,13 +52,13 @@ async def get_repository_trends(
         raise HTTPException(status_code=401, detail="無效或過期的 GitHub token。")
 
     try:
-        _, commits_data = await get_commit_number_and_list(owner, repo, access_token)
+        commits_data = await get_commit_number_and_list(owner, repo,branch, access_token)
         if not commits_data:
             raise HTTPException(status_code=404, detail="倉庫中沒有 commits，無法進行分析。")
 
         # ***** 主要修改點：新增頂層快取 *****
         latest_commit_sha = commits_data[0]['sha']
-        cache_key = f"trends_analysis:{owner}/{repo}:{latest_commit_sha}:{limit}"
+        cache_key = f"trends_analysis:{owner}/{repo}/{branch}:{latest_commit_sha}:{limit}"
 
         if redis_client:
             try:
@@ -118,7 +118,7 @@ async def get_repository_trends(
 """
         analysis_text = await generate_ai_content(prompt)
         
-        activity_analysis_data = await analyze_file_activity(owner, repo, access_token, commits_data)
+        activity_analysis_data = await analyze_file_activity(owner, repo, branch, access_token, commits_data)
 
         result = {
             "trends_analysis": analysis_text,
@@ -145,11 +145,11 @@ async def get_repository_trends(
         raise HTTPException(status_code=500, detail=f"分析倉庫趨勢時發生意外錯誤: {str(e)}")
 
 
-async def analyze_file_activity(owner: str, repo: str, access_token: str, commits_data: list, limit: int = 200):
+async def analyze_file_activity(owner: str, repo: str, branch:str, access_token: str, commits_data: list, limit: int = 200):
     """分析最近 N 個 commit 的檔案和模組修改頻率，並加入快取機制"""
     
     latest_commit_sha = commits_data[0]['sha']
-    cache_key = f"activity_analysis:{owner}/{repo}:{latest_commit_sha}:{limit}"
+    cache_key = f"activity_analysis:{owner}/{repo}/{branch}:{latest_commit_sha}:{limit}"
 
     if redis_client:
         try:
@@ -173,7 +173,8 @@ async def analyze_file_activity(owner: str, repo: str, access_token: str, commit
             try:
                 commit_details_res = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}",
-                    headers={"Authorization": f"Bearer {access_token}"}
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"sha":branch}
                 )
                 commit_details_res.raise_for_status()
                 commit_details = commit_details_res.json()

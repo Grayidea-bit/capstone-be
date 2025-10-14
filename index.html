@@ -273,7 +273,7 @@ async function getOverview() {
     showLoading();
     try {
         const { owner, repo } = selectedRepoInfo;
-        const data = await apiFetch(`/overview/repos/${owner}/${repo}?access_token=${accessToken}`);
+        const data = await apiFetch(`/overview/repos/${owner}/${repo}/perplexity?access_token=${accessToken}`);
         
         const html = `
             <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -302,7 +302,7 @@ async function getTrends() {
     showLoading('正在進行深度趨勢分析，可能需要一分鐘左右...');
     try {
         const { owner, repo } = selectedRepoInfo;
-        const data = await apiFetch(`/trends/repos/${owner}/${repo}/trends?access_token=${accessToken}`);
+        const data = await apiFetch(`/trends/repos/${owner}/${repo}/perplexity/trends?access_token=${accessToken}`);
 
         const commitTypeStats = data.statistics;
         const commitTypeLabels = Object.keys(commitTypeStats);
@@ -372,7 +372,7 @@ async function getTechDebtReport() {
     showLoading('正在進行全專案技術債掃描，可能需要較長時間...');
     try {
         const { owner, repo } = selectedRepoInfo;
-        const data = await apiFetch(`/tech_debt/repos/${owner}/${repo}/tech-debt?access_token=${accessToken}`);
+        const data = await apiFetch(`/tech_debt/repos/${owner}/${repo}/perplexity/tech-debt?access_token=${accessToken}`);
 
         const topFiles = data.activity_analysis.top_files;
         const topModules = data.activity_analysis.top_modules;
@@ -417,7 +417,7 @@ async function showCommitPRScreen() {
     try {
         const { owner, repo } = selectedRepoInfo;
         const [commits, prs] = await Promise.all([
-             apiFetch(`/repo_commit/repos/${owner}/${repo}?access_token=${accessToken}`),
+             apiFetch(`/repo_commit/repos/${owner}/${repo}/perplexity?access_token=${accessToken}`),
              apiFetch(`/pr/repos/${owner}/${repo}/pulls?access_token=${accessToken}`)
         ]);
 
@@ -443,7 +443,7 @@ async function analyzeCommit(sha) {
     const resultDiv = document.getElementById('commit-pr-analysis-result');
     resultDiv.innerHTML = `<div class="text-center p-4">分析 Commit ${sha.substring(0,7)} 中...</div>`;
     const { owner, repo } = selectedRepoInfo;
-    const endpoint = `/diff/repos/${owner}/${repo}/commits/${sha}?access_token=${accessToken}`;
+    const endpoint = `/diff/repos/${owner}/${repo}/perplexity/commits/${sha}?access_token=${accessToken}`;
     try {
         const data = await apiFetch(endpoint, { method: 'POST' });
         resultDiv.innerHTML = `<h4 class="text-lg font-bold mt-4 mb-2">Commit ${sha.substring(0,7)} 分析結果</h4><div class="prose prose-invert max-w-none p-4 bg-gray-900 rounded">${marked.parse(data.analysis)}</div>`;
@@ -514,7 +514,7 @@ async function showChatScreen() {
     let commitSelectionHtml = '';
     try {
         const { owner, repo } = selectedRepoInfo;
-        const commitsData = await apiFetch(`/repo_commit/repos/${owner}/${repo}?access_token=${accessToken}`);
+        const commitsData = await apiFetch(`/repo_commit/repos/${owner}/${repo}/perplexity?access_token=${accessToken}`);
         commitSelectionHtml = `
             <label for="commit-context-select" class="text-sm text-gray-400">選擇 Commit 上下文:</label>
             <select id="commit-context-select" class="w-full bg-gray-600 text-white p-2 rounded mt-1 mb-2 text-sm">
@@ -617,7 +617,7 @@ async function sendChatMessage() {
         targetSha = commitContextSelect ? commitContextSelect.value : '';
     }
     
-    const endpoint = `/chat/repos/${owner}/${repo}?access_token=${accessToken}&question=${encodeURIComponent(question)}&mode=${mode}&target_sha=${targetSha}`;
+    const endpoint = `/chat/repos/${owner}/${repo}/perplexity?access_token=${accessToken}&question=${encodeURIComponent(question)}&mode=${mode}&target_sha=${targetSha}`;
     
     try {
         const data = await apiFetch(endpoint, { method: 'POST' });

@@ -103,18 +103,17 @@ async def validate_github_token(access_token: str) -> bool:
 
 
 async def get_commit_number_and_list(
-    owner: str, repo: str, access_token: str
-) -> Tuple[Dict[str, int], List[Dict]]:
-    cache_key_data = f"commit_data:{owner}/{repo}"
-    cache_key_map = f"commit_map:{owner}/{repo}"
+    owner: str, repo: str, branch:str, access_token: str
+) ->  List[Dict]:
+    cache_key_data = f"commit_data:{owner}/{repo}/{branch}"
+
 
     if redis_client:
         try:
             cached_data = redis_client.get(cache_key_data)
-            cached_map = redis_client.get(cache_key_map)
-            if cached_data and cached_map:
+            if cached_data :
                 logger.info(f"快取命中: {owner}/{repo}")
-                return json.loads(cached_map), json.loads(cached_data)
+                return json.loads(cached_data)
         except redis.exceptions.RedisError as e:
             logger.error(f"讀取 Redis 快取時發生錯誤: {e}")
 
@@ -124,10 +123,15 @@ async def get_commit_number_and_list(
     async with httpx.AsyncClient() as client:
         while True:
             try:
+                headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github.v3+json",
+                }
+                
                 response = await client.get(
                     f"https://api.github.com/repos/{owner}/{repo}/commits",
-                    headers={"Authorization": f"Bearer {access_token}"},
-                    params={"per_page": 100, "page": page},
+                    headers=headers,
+                    params={"sha": branch,"per_page": 100,"page":1},
                 )
                 response.raise_for_status()
                 page_commits = response.json()
@@ -151,17 +155,10 @@ async def get_commit_number_and_list(
         logger.info(f"倉庫 {owner}/{repo} 中沒有 commits。")
         return {}, []
 
-    commit_map = {
-        commit["sha"]: i for i, commit in enumerate(reversed(all_commits_fetched), 1)
-    }
-
     if redis_client:
         try:
             redis_client.set(
                 cache_key_data, json.dumps(all_commits_fetched), ex=CACHE_TTL_SECONDS
-            )
-            redis_client.set(
-                cache_key_map, json.dumps(commit_map), ex=CACHE_TTL_SECONDS
             )
             logger.info(
                 f"成功為 {owner}/{repo} 快取了 {len(all_commits_fetched)} 個 commits。"
@@ -169,7 +166,7 @@ async def get_commit_number_and_list(
         except redis.exceptions.RedisError as e:
             logger.error(f"寫入 Redis 快取時發生錯誤: {e}")
 
-    return commit_map, all_commits_fetched
+    return all_commits_fetched
 
 
 async def generate_ai_content(prompt_text: str) -> str:

@@ -2,7 +2,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from ..setting import (
     validate_github_token,
-    get_commit_number_and_list,
     generate_ai_content,
     logger,
     redis_client,      # 確保 redis_client 已導入
@@ -44,8 +43,8 @@ def get_code_metrics(code: str):
         return None
 
 
-@tech_debt_router.get("/repos/{owner}/{repo}/tech-debt")
-async def get_tech_debt_report(owner: str, repo: str, access_token: str = Query(None)):
+@tech_debt_router.get("/repos/{owner}/{repo}/{branch}/tech-debt")
+async def get_tech_debt_report(owner: str, repo: str,branch:str, access_token: str = Query(None)):
     if not access_token:
         raise HTTPException(status_code=401, detail="缺少 Access Token。")
 
@@ -59,13 +58,20 @@ async def get_tech_debt_report(owner: str, repo: str, access_token: str = Query(
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            _, commits_data = await get_commit_number_and_list(owner, repo, access_token)
+            commits_response = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/commits",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"per_page": 100,"page":1,"sha":branch} 
+            )
+            commits_response.raise_for_status()
+            commits_data = commits_response.json()
+            
             if not commits_data:
                 raise HTTPException(status_code=404, detail="倉庫中沒有 commits，無法進行分析。")
 
             # ***** 主要修改點：新增頂層快取 *****
             latest_commit_sha = commits_data[0]['sha']
-            cache_key = f"tech_debt_analysis:{owner}/{repo}:{latest_commit_sha}"
+            cache_key = f"tech_debt_analysis:{owner}/{repo}/{branch}:{latest_commit_sha}"
 
             if redis_client:
                 try:
@@ -77,10 +83,10 @@ async def get_tech_debt_report(owner: str, repo: str, access_token: str = Query(
                     logger.error(f"讀取技術債分析快取失敗: {e}", extra={"cache_key": cache_key})
             # ***********************************
 
-            activity_analysis = await analyze_file_activity(owner, repo, access_token, commits_data)
+            activity_analysis = await analyze_file_activity(owner, repo,branch, access_token, commits_data)
             hotspot_files = [file_info[0] for file_info in activity_analysis.get("top_files", [])]
 
-            analyzer = CodeAnalyzer(owner, repo, access_token, client)
+            analyzer = CodeAnalyzer(owner, repo,branch, access_token, client)
             hotspot_files_content = await analyzer.get_files_content(hotspot_files)
 
             code_smell_context = ""

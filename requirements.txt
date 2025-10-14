@@ -7,3 +7,7 @@ tenacity
 redis
 python-json-logger
 radon
+numpy 
+torch 
+transformers 
+scikit-learn

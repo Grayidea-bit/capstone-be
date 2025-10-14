@@ -3,7 +3,6 @@ from fastapi import APIRouter, HTTPException, Query
 import httpx
 from ..setting import (
     validate_github_token,
-    get_commit_number_and_list,
     generate_ai_content,
     MAX_CHARS_README,
     logger,
@@ -14,8 +13,8 @@ import json
 
 overview_router = APIRouter()
 
-@overview_router.get("/repos/{owner}/{repo}")
-async def get_repo_overview(owner: str, repo: str, access_token: str = Query(None)):
+@overview_router.get("/repos/{owner}/{repo}/{branch}")
+async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str = Query(None)):
     if not access_token:
         raise HTTPException(status_code=401, detail="缺少 Access Token。")
 
@@ -28,17 +27,31 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
         
     async with httpx.AsyncClient() as client:
         try:
-            _, commits_data = await get_commit_number_and_list(
-                owner, repo, access_token
+            branch_info_url = (
+                f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}"
             )
+            branch_info_res = await client.get(branch_info_url, headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github.v3+json",
+            })
+            branch_info_res.raise_for_status()
+            branch_commit_sha = branch_info_res.json()["commit"]["sha"]
+            
+            commits_response = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/commits",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"sha": branch_commit_sha,"per_page": 100,"page":1},
+            )
+            commits_response.raise_for_status()
+            commits_data = commits_response.json()
+            
             if not commits_data:
                 raise HTTPException(
                     status_code=404, detail="倉庫中沒有 commits，無法生成概覽。"
                 )
 
-            # ***** 主要修改點：新增頂層快取 *****
             latest_commit_sha = commits_data[0]["sha"]
-            cache_key = f"overview:{owner}/{repo}:{latest_commit_sha}"
+            cache_key = f"overview:{owner}/{repo}/{branch}:{latest_commit_sha}"
             if redis_client:
                 try:
                     cached_result = redis_client.get(cache_key)
@@ -57,6 +70,7 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
                         "Authorization": f"Bearer {access_token}",
                         "Accept": "application/vnd.github.raw",
                     },
+                    params={"sha": branch}
                 )
                 if readme_response.status_code == 200:
                     readme_content = readme_response.text
@@ -84,6 +98,7 @@ async def get_repo_overview(owner: str, repo: str, access_token: str = Query(Non
                 for c in commits_data[:15]
             ]
             commit_messages_text = "\n".join(recent_commit_messages)
+            print("=================finish get file list===============")
 
             prompt = f"""
 ### **角色 (Role)**

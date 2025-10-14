@@ -43,17 +43,18 @@ def set_conversation_history(history_key: str, history: list):
         logger.error(f"寫入對話歷史快取失敗: {e}", extra={"history_key": history_key})
 
 
-@chat_router.post("/repos/{owner}/{repo}")
+@chat_router.post("/repos/{owner}/{repo}/{branch}")
 async def chat_with_repo(
     owner: str,
     repo: str,
+    branch: str,
     access_token: str = Query(None),
     question: str = Query(None),
     target_sha: str = Query(
         None, description="在 'commit' 模式下，指定上下文的 commit SHA"
     ),
     mode: str = Query(
-        "commit", description="問答模式: 'commit', 'repository', 或 'what-if'"
+        "commit", description="問答模式: 'commit', 'repository'"
     ),
 ):
     if not access_token or not question:
@@ -77,8 +78,8 @@ async def chat_with_repo(
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            commit_map, commits_data = await get_commit_number_and_list(
-                owner, repo, access_token
+            commits_data = await get_commit_number_and_list(
+                owner, repo,branch, access_token
             )
             if not commits_data:
                 return {
@@ -86,7 +87,7 @@ async def chat_with_repo(
                     "history": [],
                 }
 
-            analyzer = CodeAnalyzer(owner, repo, access_token, client)
+            analyzer = CodeAnalyzer(owner, repo,branch, access_token, client)
 
             # ***** 主要修改點：新增問答快取邏輯 *****
             cache_key = None
@@ -94,10 +95,10 @@ async def chat_with_repo(
 
             if mode == "repository":
                 latest_commit_sha = commits_data[0]["sha"]
-                cache_key = f"chat:repository:{owner}/{repo}:{latest_commit_sha}:{question_hash}"
+                cache_key = f"chat:repository:{owner}/{repo}/{branch}:{latest_commit_sha}:{question_hash}"
             elif mode == "commit":
                 sha_to_use = target_sha or commits_data[0]["sha"]
-                cache_key = f"chat:commit:{owner}/{repo}:{sha_to_use}:{question_hash}"
+                cache_key = f"chat:commit:{owner}/{repo}/{branch}:{sha_to_use}:{question_hash}"
 
             if cache_key and redis_client:
                 try:
@@ -121,16 +122,14 @@ async def chat_with_repo(
 
             if mode == "repository":
                 answer_text = await handle_repository_qa(analyzer, question)
-            elif mode == "what-if":
-                answer_text = await handle_what_if_qa(analyzer, question)
             else:  # mode == "commit"
                 answer_text = await handle_commit_qa(
                     owner,
                     repo,
                     access_token,
                     question,
+                    branch,
                     target_sha,
-                    commit_map,
                     commits_data,
                     client,
                 )
@@ -164,75 +163,6 @@ async def chat_with_repo(
             raise HTTPException(
                 status_code=500, detail=f"處理對話時發生意外錯誤: {str(e)}"
             )
-
-
-# 以下的 handle_what_if_qa, handle_repository_qa, handle_commit_qa 函式維持不變
-async def handle_what_if_qa(analyzer: CodeAnalyzer, question: str):
-    logger.info("進入 What-if 場景模擬模式")
-
-    # 1. 使用分析器獲取檔案列表
-    all_py_files = await analyzer.get_all_py_files()
-    file_list_str = "\n".join(all_py_files)
-
-    # 2. **第一階段 AI 呼叫**: 讓 AI 找出可能受影響的檔案
-    file_selection_prompt = f"""
-你是一個程式碼依賴分析專家。你的任務是根據使用者提出的「假設性變更」，從下方的檔案清單中，找出所有**可能受到直接或間接影響**的檔案。
-
-使用者提出的假設性變更: "{question}"
-
-檔案清單:
-{file_list_str}
-
-請回傳你認為所有可能受影響的檔案路徑，每個路徑一行。請盡可能列出所有相關檔案，即使只是間接關聯。
-"""
-    logger.info("向 AI 請求分析可能受影響的檔案...")
-    relevant_files_str = await generate_ai_content(file_selection_prompt)
-    relevant_files = [
-        line.strip() for line in relevant_files_str.split("\n") if line.strip()
-    ]
-    logger.info(f"AI 判斷可能受影響的檔案: {relevant_files}")
-
-    # 3. 使用分析器獲取這些檔案的內容
-    files_content_map = await analyzer.get_files_content(relevant_files)
-
-    # 4. **第二階段 AI 呼叫**: 進行衝擊分析
-    context_for_final_prompt = ""
-    for path, content in files_content_map.items():
-        context_for_final_prompt += f"--- 檔案: `{path}` ---\n```\n{content}\n```\n\n"
-
-    final_prompt = f"""
-### **角色 (Role)**
-你是一位資深系統架構師，擅長分析程式碼之間的依賴關係和評估變更所帶來的潛在風險。
-
-### **任務 (Task)**
-根據使用者提出的「假設性變更」和我們從程式碼庫中提取出的「相關檔案內容」，生成一份詳細的「衝擊分析報告」。
-
-### **使用者提出的假設性變更 (What-if Scenario)**
-"{question}"
-
-### **相關檔案內容 (Context)**
-{context_for_final_prompt if context_for_final_prompt else "未能從專案中找到與此變更直接相關的檔案。"}
-
-### **輸出要求 (Output Requirements)**
-請以條列式、結構化的方式生成報告，包含以下部分：
-
-1.  **直接影響 (Direct Impact)**:
-    * 明確指出哪些檔案中的哪些函式或類別會因為這個變更而直接出錯或需要修改。請引用具體的程式碼片段。
-
-2.  **間接影響 (Indirect Impact)**:
-    * 分析這個變更可能導致的連鎖反應。例如，修改了一個核心函式後，有哪些其他模組的功能可能會表現異常？
-
-3.  **潛在風險評估 (Potential Risks)**:
-    * 這個變更是否可能引入新的 Bug？是否會影響系統效能或安全性？
-
-4.  **建議執行步驟 (Recommended Action Plan)**:
-    * 如果要安全地實施這項變更，建議的步驟是什麼？（例如：需要修改哪些檔案、需要新增哪些測試案例等）。
-
-請開始生成衝擊分析報告：
-"""
-    logger.info("結合檔案內容，向 AI 請求進行衝擊分析...")
-    answer = await generate_ai_content(final_prompt)
-    return answer
 
 
 # modify
@@ -287,8 +217,8 @@ async def handle_commit_qa(
     repo: str,
     access_token: str,
     question: str,
+    branch: str,
     target_sha: str,
-    commit_map: dict,
     commits_data: list,
     client: httpx.AsyncClient,
 ):
@@ -296,14 +226,15 @@ async def handle_commit_qa(
 
     if not target_sha:
         target_sha = commits_data[0]["sha"]
-
+    
     # 獲取當前 commit 的 diff
     diff_response = await client.get(
         f"https://api.github.com/repos/{owner}/{repo}/commits/{target_sha}",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/vnd.github.v3.diff",
+        headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github.v3.diff",
         },
+        params={"sha": branch}
     )
     diff_response.raise_for_status()
     current_commit_diff_text = diff_response.text
@@ -332,7 +263,7 @@ async def handle_commit_qa(
                     break
                 try:
                     file_content_res = await client.get(
-                        f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}?ref={previous_commit_sha}",
+                        f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}?sha={previous_commit_sha}",
                         headers={
                             "Authorization": f"Bearer {access_token}",
                             "Accept": "application/vnd.github.raw",

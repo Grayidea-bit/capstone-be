@@ -14,14 +14,15 @@ import json
 diff_router = APIRouter()
 
 
-@diff_router.post("/repos/{owner}/{repo}/commits/{sha}")
+@diff_router.post("/repos/{owner}/{repo}/{branch}/commits/{sha}")
 async def analyze_commit_diff(
-    owner: str, repo: str, sha: str, access_token: str = Query(None)
+    owner: str, repo: str,branch:str, sha: str, access_token: str = Query(None)
 ):
+    print("===================be calling=====================")
     if not access_token:
         raise HTTPException(status_code=401, detail="缺少 Access Token。")
 
-    cache_key = f"diff_analysis:{owner}/{repo}/{sha}"
+    cache_key = f"diff_analysis:{owner}/{repo}/{branch}/{sha}"
     if redis_client:
         try:
             cached_result = redis_client.get(cache_key)
@@ -42,8 +43,8 @@ async def analyze_commit_diff(
 
     async with httpx.AsyncClient() as client:
         try:
-            commit_map, commits_data = await get_commit_number_and_list(
-                owner, repo, access_token
+            commits_data = await get_commit_number_and_list(
+                owner, repo,branch, access_token
             )
             if not commits_data:
                 raise HTTPException(
@@ -56,25 +57,40 @@ async def analyze_commit_diff(
                     f"目標 commit SHA {sha} 未在快取的 commit 列表中找到。將嘗試直接從 GitHub API 獲取。"
                 )
                 try:
+                    headers = {
+                        "Authorization": f"Bearer {access_token}",
+                        "Accept": "application/vnd.github.v3+json",
+                    }
+                    branch_info_url = f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}"
+                    branch_info_res = await client.get(
+                        branch_info_url, headers=headers
+                    )
+                    branch_info_res.raise_for_status()
+                    commit_sha = branch_info_res.json()["commit"]["sha"]
+                    
                     target_commit_res = await client.get(
                         f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}",
-                        headers={"Authorization": f"Bearer {access_token}"},
+                        headers=headers,
+                        params={"sha": commit_sha},
                     )
                     target_commit_res.raise_for_status()
+                    target_commit_obj=target_commit_res.json()
                 except httpx.HTTPStatusError:
                     raise HTTPException(
                         status_code=404,
                         detail=f"目標 commit SHA {sha} 未在倉庫 {owner}/{repo} 中找到。",
                     )
-
-            target_commit_number = commit_map.get(sha)
-
+                    
+            commit_map= {commit["sha"]: i for i, commit in enumerate(reversed(commits_data), 1)}
+            target_commit_number = commit_map.get(sha)   
+            
             current_diff_response = await client.get(
                 f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}",
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Accept": "application/vnd.github.v3.diff",
                 },
+                params={"sha":branch},
             )
             current_diff_response.raise_for_status()
             current_diff_text = current_diff_response.text
@@ -96,6 +112,7 @@ async def analyze_commit_diff(
                                 "Authorization": f"Bearer {access_token}",
                                 "Accept": "application/vnd.github.v3.diff",
                             },
+                            params={"sha":branch}
                         )
                         if prev_diff_response.status_code == 200:
                             previous_diff_text = prev_diff_response.text
