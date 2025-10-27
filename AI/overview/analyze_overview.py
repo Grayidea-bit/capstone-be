@@ -1,4 +1,4 @@
-# capstone-be/AI/overview/analyze_overview.py
+import asyncio # (保留 asyncio 沒關係，因為 generate_ai_content 仍是 async)
 from fastapi import APIRouter, HTTPException, Query
 import httpx
 from ..setting import (
@@ -100,7 +100,8 @@ async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str 
             commit_messages_text = "\n".join(recent_commit_messages)
             print("=================finish get file list===============")
 
-            prompt = f"""
+            # --- (步驟 1：執行第一個 AI 任務 - 產生概覽) ---
+            overview_prompt = f"""
 ### **角色 (Role)**
 你是一位頂尖的技術策略顧問與軟體架構師。你的專長是快速理解一個軟體專案的核心價值、主要功能與技術架構。
 
@@ -108,15 +109,15 @@ async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str 
 根據提供的 GitHub 倉庫的綜合資訊，撰寫一份**單一段落**、約 150 字的專案目的與現況摘要。你的分析應**宏觀且全面**，不要過度聚焦於單一的細節。
 
 ### **核心分析資料 (Primary Information Sources)**
-1.  **README 文件 (最重要)**: 這是理解專案目的和官方說明的首要依據。
+1.  **README 文件 (最重要)**: 
     ```markdown
     {readme_content if readme_content else "這個專案尚未提供 README 文件。"}
     ```
-2.  **專案檔案結構**: 這些檔案和目錄路徑揭示了專案的技術棧和架構。
+2.  **專案檔案結構**:
     ```
     {file_structure_text[:1000] if file_structure_text else "無法獲取檔案結構。"}
     ```
-3.  **近期開發動態 (Commit 訊息)**: 這些訊息標題反映了最近的開發重點。
+3.  **近期開發動態 (Commit 訊息)**:
     ```
     {commit_messages_text if commit_messages_text else "無法獲取 commit 訊息。"}
     ```
@@ -129,18 +130,62 @@ async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str 
 
 請開始生成摘要：
 """
-            overview_text = await generate_ai_content(prompt)
+            try:
+                overview_text = await generate_ai_content(overview_prompt)
+                logger.info("成功生成 AI 概覽。")
+            except Exception as e:
+                logger.error(f"AI 概覽生成失敗: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail="AI 概覽生成失敗。")
+
+
+            # --- (步驟 2：根據概覽，執行第二個 AI 任務 - 產生流程圖) ---
+            flowchart_prompt = f"""
+### **角色 (Role)**
+你是一位專精於業務流程分析的系統分析師。
+
+### **任務 (Task)**
+根據以下提供的專案「AI 專案概覽」文字，將其核心功能和工作流程，轉換成一份簡潔的 PlantUML **活動圖 (Activity Diagram)**。
+
+### **分析資料 (Project Overview Text)**
+```
+{overview_text}
+```
+
+### **輸出要求 (Output Requirements)**
+1.  **重點**: 專注於概覽中提到的**核心功能**和**主要步驟** (例如：程式碼分析 -> 差異比較 -> 技術債識別 -> 對話互動)。
+2.  **簡潔**: 忽略次要細節，保持圖表高層次且易於理解。
+3.  **格式**: 必須包含 `@startuml` 和 `@enduml` 標籤。
+4.  **語氣**: 使用**繁體中文**來描述流程節點。
+5.  **語法**:
+    * 使用標準的 PlantUML 活動圖語法。
+    * 以 `(*)` (開始) 和 `(*)` (結束) 作為起點和終點。
+    * 使用 `-->` 串聯流程。
+    * 範例： `(*) --> "功能一" --> "功能二" --> (*)`
+6.  **嚴格**: 絕對不要在 `@startuml` ... `@enduml` 區塊之外包含任何解釋性文字或註解。
+
+請開始生成 PlantUML：
+"""
+            
+            try:
+                plantuml_code = await generate_ai_content(flowchart_prompt)
+                logger.info("成功生成 PlantUML 流程圖。")
+            except Exception as e:
+                logger.error(f"AI PlantUML 流程圖生成失敗: {e}", exc_info=True)
+                # 即使流程圖失敗，我們還是可以回傳概覽，只是 PlantUML 會是空的
+                plantuml_code = "@startuml\n' 流程圖生成失敗: {e}\n@enduml"
+
             
             result = {
                 "overview": overview_text,
-                "file_structure": file_structure_text 
+                "file_structure": file_structure_text,
+                "plantuml_code": plantuml_code
             }
 
-            # ***** 主要修改點：將結果存入快取 *****
+            # ***** 將結果存入快取 *****
             if redis_client:
                 try:
                     redis_client.set(cache_key, json.dumps(result), ex=CACHE_TTL_SECONDS)
-                    logger.info(f"已快取專案概覽: {cache_key}")
+                    logger.info(f"已快取專案概覽 (含流程圖): {cache_key}")
                 except Exception as e:
                     logger.error(f"寫入專案概覽快取失敗: {e}", extra={"cache_key": cache_key})
             # ***********************************
