@@ -7,6 +7,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
     <style>
         body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
@@ -97,6 +98,7 @@
     </div>
 
 <script>
+
 const GITHUB_CLIENT_ID = 'Ov23li56CKrX18dJODju';
 const BACKEND_URL = 'http://127.0.0.1:8000';
 
@@ -394,13 +396,71 @@ async function getBranches() {
 }
 
 
+function encodePlantUML(plantUMLCode) {
+    if (!window.pako) {
+        console.error("Pako.js library is not loaded! Cannot render PlantUML.");
+        return "";
+    }
+    
+    const utf8Encoder = new TextEncoder();
+    const data = utf8Encoder.encode(plantUMLCode);
+    
+    const compressed = window.pako.deflate(data, { 
+        level: 9,
+        raw: true 
+    });
+
+    let encoded = "";
+    const base64Chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";
+    
+    for (let i = 0; i < compressed.length; i += 3) {
+        const b1 = compressed[i];
+        const b2 = compressed[i + 1];
+        const b3 = compressed[i + 2];
+
+        encoded += base64Chars.charAt(b1 >> 2);
+        encoded += base64Chars.charAt(((b1 & 3) << 4) | (b2 >> 4));
+        
+        if (i + 1 < compressed.length) {
+            encoded += base64Chars.charAt(((b2 & 15) << 2) | (b3 >> 6));
+            if (i + 2 < compressed.length) {
+                encoded += base64Chars.charAt(b3 & 63);
+            } else {
+                encoded += "A"; // Padding
+            }
+        } else {
+            encoded += "AA"; // Padding
+        }
+    }
+    return encoded;
+}
+
 async function getOverview() {
     if (!selectedRepoInfo.owner) return;
     showLoading();
     try {
-        const { owner, repo } = selectedRepoInfo;
-        const data = await apiFetch(`/overview/repos/${owner}/${repo}/perplexity?access_token=${accessToken}`);
-        
+        const { owner, repo} = selectedRepoInfo;
+        const data = await apiFetch(`/overview/repos/${owner}/${repo}/main?access_token=${accessToken}`);
+        let plantUMLHtml = "";
+        if (data.plantuml_code) { // 假設後端回傳的欄位是 plantuml_code
+            try {
+                const encodedUML = encodePlantUML(data.plantuml_code);
+                if (encodedUML) {
+                    const plantUMLUrl = `https://www.plantuml.com/plantuml/svg/${encodedUML}`;
+                    plantUMLHtml = `
+                        <h3 class="text-xl font-semibold mt-6 mb-3 text-white">
+                            <i class="fas fa-sitemap mr-2"></i>架構圖
+                        </h3>
+                        <div class="bg-white p-4 rounded-lg flex justify-center overflow-auto">
+                            <img src="${plantUMLUrl}" alt="PlantUML Architecture Diagram" class="max-w-full h-auto">
+                        </div>
+                    `;
+                }
+            } catch (umlError) {
+                console.error("PlantUML rendering error:", umlError);
+                plantUMLHtml = "<p class='text-red-400'>無法渲染 PlantUML 架構圖。</p>";
+            }
+        }
         const html = `
             <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div>
@@ -410,6 +470,7 @@ async function getOverview() {
                     <div class="prose prose-invert max-w-none text-gray-300">
                         ${marked.parse(data.overview)}
                     </div>
+                    ${plantUMLHtml}
                 </div>
                 <div>
                     <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-gray-500 pb-2">
@@ -419,8 +480,10 @@ async function getOverview() {
                 </div>
             </div>
         `;
+        
         displayContent(html);
-    } catch (error) {}
+    } catch (error) {console.error("Failed to get overview:", error); displayError(error.message || "獲取專案概覽失敗。");
+    }
 }
 
 async function getTrends() {
