@@ -1,4 +1,3 @@
-# capstone-be/main.py
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from AI.chat.chatting_repo import chat_router
@@ -12,13 +11,14 @@ from github_info.get_repo_commit import repo_commit_router
 from github_info.get_repo_list import repo_list_router
 from github_info.get_user_info import user_info_router
 from github_info.get_repo_prs import pr_list_router
-import logging
+from github_info.get_branch_contri import contri_router 
+from github_info.get_repo_branch import repo_branch_router
 from AI.setting import logger
+import logging
 
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
-
 
 app.include_router(chat_router, prefix="/chat", tags=["對話 (Chat)"])
 app.include_router(diff_router, prefix="/diff", tags=["Commit 分析"])
@@ -31,6 +31,8 @@ app.include_router(login_router, prefix="/login", tags=["GitHub 登入"])
 app.include_router(repo_commit_router, prefix="/repo_commit", tags=["獲取 Commits"])
 app.include_router(repo_list_router, prefix="/repo_list", tags=["獲取 Repos"])
 app.include_router(user_info_router, prefix="/user_info", tags=["獲取使用者資訊"])
+app.include_router(contri_router, prefix="/contributions", tags=["貢獻分析 (Contributions)"])
+app.include_router(repo_branch_router, prefix="/branches", tags=["獲取 Branches"])
 
 app.add_middleware(
     CORSMiddleware,

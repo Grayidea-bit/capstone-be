@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from AI.setting import validate_github_token
+from .async_request import async_multiple_request
 import httpx
 import logging
 
@@ -26,17 +27,16 @@ async def get_branch(owner: str, repo: str, access_token: str = Query(None)):
         )
 
     url = f"https://api.github.com/repos/{owner}/{repo}/branches"
-
+    headers={"Authorization": f"Bearer {access_token}"}
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={"sort": "updated", "per_page": 100},
-            )
-            response.raise_for_status()
-            branch_data = response.json()
-            branch_names = [b["name"] for b in branch_data]
+            response = await async_multiple_request(url,headers)
+            sorted_response=list()
+            for page in range(1, len(response) + 1):
+                for context in response[page]:
+                    sorted_response.append(context)
+            
+            branch_names = [b["name"] for b in sorted_response]
             logger.info(f"成功獲取 {len(branch_names)} 個 branch。")
             return JSONResponse({"branches": branch_names})
 

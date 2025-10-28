@@ -30,7 +30,6 @@ async def get_repos(access_token: str = Query(None)):
                 params={"type": "all", "sort": "updated", "per_page": 100},
             )
             repos_response.raise_for_status()
-            repos_response.raise_for_status()
             repos_data = repos_response.json()
             logger.info(f"成功獲取 {len(repos_data)} 個倉庫。")
             return repos_data
