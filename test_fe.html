@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub AI 分析工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .spinner { border-top-color: #3498db; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #chat-output::-webkit-scrollbar { width: 6px; }
+        #chat-output::-webkit-scrollbar-thumb { background-color: #4A5568; border-radius: 3px; }
+        .analysis-card { transition: all 0.3s ease; }
+        .btn-action:disabled { background-color: #9CA3AF; cursor: not-allowed; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #2f3640;
+            color: white;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            z-index: 1000;
+            transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+            transform: translateY(-100%);
+            opacity: 0;
+        }
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 min-h-screen">
+    <div id="toast-container"></div>
+    <div class="container mx-auto p-4 md:p-6 lg:p-8">
+
+        <header class="flex flex-col md:flex-row justify-between items-center mb-6">
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-4 md:mb-0">
+                <i class="fab fa-github-alt mr-2"></i> GitHub AI 分析工具
+            </h1>
+            <div id="user-info" class="flex items-center space-x-4">
+                <button id="login-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">
+                    <i class="fab fa-github mr-2"></i> 使用 GitHub 登入
+                </button>
+            </div>
+        </header>
+
+        <main id="main-content" class="hidden">
+            <div class="mb-6 bg-gray-800 p-4 rounded-lg shadow-lg">
+                <label for="repo-select" class="block text-lg font-medium text-gray-300 mb-2">選擇您的倉庫:</label>
+                <select id="repo-select" class="w-full bg-gray-700 text-white p-3 rounded-md border border-gray-600 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="">請選擇一個倉庫...</option>
+                </select>
+            </div>
+
+            <div id="action-buttons" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-4 mb-8">
+                <button id="overview-btn" class="btn-action bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-search mr-2"></i> 專案概覽
+                </button>
+                <button id="trends-btn" class="btn-action bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-chart-line mr-2"></i> 倉庫趨勢
+                </button>
+                <button id="tech-debt-btn" class="btn-action bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-biohazard mr-2"></i> 技術債報告
+                </button>
+                <button id="contribution-btn" class="btn-action bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-users mr-2"></i> 貢獻者分析
+                </button>
+                <button id="branch-btn" class="btn-action bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-users mr-2"></i> 取得分支
+                </button>
+                <button id="pr-btn" class="btn-action bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-code-pull-request mr-2"></i> PRs / Commits
+                </button>
+                 <button id="chat-btn" class="btn-action bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled>
+                    <i class="fas fa-comments mr-2"></i> 智能問答
+                </button>
+            </div>
+
+            <div id="analysis-output" class="analysis-card bg-gray-800 p-6 rounded-lg shadow-lg min-h-[400px] flex items-center justify-center">
+                <div id="initial-message" class="text-center text-gray-400">
+                    <i class="fas fa-arrow-up fa-2x mb-4"></i>
+                    <p class="text-xl">請先從上方選擇一個倉庫，然後點擊功能按鈕開始分析</p>
+                </div>
+                 <div id="loading-spinner" class="hidden text-center">
+                    <div class="spinner w-16 h-16 rounded-full border-4 border-gray-600 border-t-indigo-500 mx-auto"></div>
+                    <p class="mt-4 text-lg">分析中，請稍候...</p>
+                </div>
+                <div id="content-display" class="w-full"></div>
+            </div>
+        </main>
+    </div>
+
+<script>
+const GITHUB_CLIENT_ID = 'Ov23li56CKrX18dJODju';
+const BACKEND_URL = 'http://127.0.0.1:8000';
+
+// DOM Elements
+const loginBtn = document.getElementById('login-btn');
+const userInfoDiv = document.getElementById('user-info');
+const mainContent = document.getElementById('main-content');
+const repoSelect = document.getElementById('repo-select');
+
+const overviewBtn = document.getElementById('overview-btn');
+const trendsBtn = document.getElementById('trends-btn');
+const techDebtBtn = document.getElementById('tech-debt-btn');
+const prBtn = document.getElementById('pr-btn');
+const chatBtn = document.getElementById('chat-btn');
+const contributionBtn = document.getElementById('contribution-btn'); 
+const branchBtn = document.getElementById('branch-btn');
+const actionButtons = [overviewBtn, trendsBtn, prBtn, chatBtn, techDebtBtn, contributionBtn, branchBtn];
+
+const analysisOutput = document.getElementById('analysis-output');
+const loadingSpinner = document.getElementById('loading-spinner');
+const contentDisplay = document.getElementById('content-display');
+const initialMessage = document.getElementById('initial-message');
+const toastContainer = document.getElementById('toast-container');
+
+let accessToken = null;
+let currentUser = null;
+let selectedRepoInfo = {
+    owner: null,
+    repo: null
+};
+let lastPRAnalysis = ''; 
+
+// --- UTILITY FUNCTIONS ---
+function showLoading(message = '分析中，請稍候...') {
+    initialMessage.classList.add('hidden');
+    contentDisplay.innerHTML = '';
+    loadingSpinner.querySelector('p').textContent = message;
+    loadingSpinner.classList.remove('hidden');
+}
+
+function hideLoading() {
+    loadingSpinner.classList.add('hidden');
+}
+
+function displayContent(html) {
+    hideLoading();
+    contentDisplay.innerHTML = html;
+}
+
+function displayError(message) {
+    hideLoading();
+    contentDisplay.innerHTML = `
+        <div class="bg-red-900 border-l-4 border-red-500 text-red-200 p-4 rounded-md" role="alert">
+            <p class="font-bold">發生錯誤</p>
+            <p>${message}</p>
+        </div>
+    `;
+}
+
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `<i class="fas fa-check-circle mr-2"></i> ${message}`;
+    toastContainer.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('show');
+    }, 10);
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+
+async function apiFetch(endpoint, options = {}) {
+    try {
+        const response = await fetch(`${BACKEND_URL}${endpoint}`, options);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('API Fetch Error:', error);
+        displayError(error.message);
+        throw error;
+    }
+}
+
+// --- GITHUB AUTHENTICATION ---
+loginBtn.addEventListener('click', () => {
+    window.location.href = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=repo`;
+});
+
+async function handleOAuthCallback() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    if (code) {
+        window.history.pushState({}, document.title, window.location.pathname);
+        try {
+            const data = await apiFetch(`/login/?code=${code}`);
+            accessToken = data.access_token;
+            localStorage.setItem('github_access_token', accessToken);
+            await initializeUser();
+        } catch (error) {
+            displayError('GitHub 登入失敗，請重試');
+        }
+    }
+}
+
+async function initializeUser() {
+    accessToken = localStorage.getItem('github_access_token');
+    if (accessToken) {
+        try {
+            const userData = await apiFetch(`/user_info/?access_token=${accessToken}`);
+            currentUser = userData.username;
+            userInfoDiv.innerHTML = `
+                <img src="${userData.avatar_url}" alt="${userData.username}" class="w-12 h-12 rounded-full border-2 border-indigo-500">
+                <span class="font-semibold text-lg">${userData.username}</span>
+                <button id="logout-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300">登出</button>
+            `;
+            document.getElementById('logout-btn').addEventListener('click', () => {
+                localStorage.removeItem('github_access_token');
+                window.location.reload();
+            });
+            loginBtn.classList.add('hidden');
+            mainContent.classList.remove('hidden');
+            await loadRepos();
+        } catch (error) {
+            localStorage.removeItem('github_access_token');
+            accessToken = null;
+        }
+    }
+}
+
+// --- REPO AND DATA LOADING ---
+async function loadRepos() {
+    showLoading();
+    try {
+        const repos = await apiFetch(`/repo_list/?access_token=${accessToken}`);
+        repoSelect.innerHTML = '<option value="">請選擇一個倉庫...</option>';
+        repos.forEach(repo => {
+            const option = document.createElement('option');
+            option.value = repo.full_name;
+            option.textContent = repo.full_name;
+            repoSelect.appendChild(option);
+        });
+        hideLoading();
+        initialMessage.classList.remove('hidden');
+    } catch (error) {
+        displayError('無法載入您的倉庫列表');
+    }
+}
+
+repoSelect.addEventListener('change', () => {
+    const selectedFullName = repoSelect.value;
+    if (selectedFullName) {
+        const [owner, repo] = selectedFullName.split('/');
+        selectedRepoInfo.owner = owner;
+        selectedRepoInfo.repo = repo;
+        actionButtons.forEach(btn => btn.disabled = false);
+        initialMessage.classList.add('hidden');
+        contentDisplay.innerHTML = '';
+    } else {
+        selectedRepoInfo.owner = null;
+        selectedRepoInfo.repo = null;
+        actionButtons.forEach(btn => btn.disabled = true);
+        initialMessage.classList.remove('hidden');
+    }
+});
+
+// --- BUTTON EVENT LISTENERS ---
+overviewBtn.addEventListener('click', getOverview);
+trendsBtn.addEventListener('click', getTrends);
+techDebtBtn.addEventListener('click', getTechDebtReport);
+prBtn.addEventListener('click', showCommitPRScreen);
+chatBtn.addEventListener('click', showChatScreen);
+contributionBtn.addEventListener('click', getContributions);
+branchBtn.addEventListener('click', getBranches);
+
+// --- ANALYSIS FUNCTIONS ---
+
+async function getContributions() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在分析所有分支的貢獻者... 這可能需要一些時間。');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const data = await apiFetch(`/contributions/repos/${owner}/${repo}/contributions?access_token=${accessToken}`);
+        
+        // 將物件轉換為陣列並排序
+        const contributors = Object.entries(data).sort((a, b) => b[1] - a[1]);
+        const labels = contributors.map(c => c[0]);
+        const values = contributors.map(c => c[1]);
+
+        const html = `
+            <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-orange-500 pb-2">
+                <i class="fas fa-users mr-2"></i> 倉庫貢獻者分析 (所有分支)
+            </h2>
+            <p class="text-gray-400 mb-6">此圖表顯示了在所有分支中，每位貢獻者的總 Commit 次數。</p>
+            <div class="bg-gray-800 p-4 rounded-lg">
+                <canvas id="contribution-chart"></canvas>
+            </div>
+        `;
+        displayContent(html);
+
+        const ctx = document.getElementById('contribution-chart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Commit 次數',
+                    data: values,
+                    backgroundColor: 'rgba(234, 88, 12, 0.6)',
+                    borderColor: 'rgba(234, 88, 12, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y', // 讓長條圖變為水平
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    title: {
+                        display: true,
+                        text: '貢獻者 Commit 次數排行榜',
+                        color: '#F9FAFB',
+                        font: { size: 18 }
+                    }
+                },
+                scales: {
+                    x: { ticks: { color: '#D1D5DB' } },
+                    y: { ticks: { color: '#D1D5DB' } }
+                }
+            }
+        });
+
+    } catch (error) {
+        // 如果 API 返回的是 object 且包含 detail，則顯示 detail
+        if (error.message && error.message.includes('detail')) {
+            try {
+                const errorObj = JSON.parse(error.message);
+                displayError(errorObj.detail || '分析貢獻者時發生未知錯誤');
+            } catch (e) {
+                displayError(error.message);
+            }
+        } else {
+            displayError(error.message);
+        }
+    }
+}
+
+async function getBranches() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在取得分支列表...');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        // Assuming your FastAPI router is mounted at '/branch'
+        const data = await apiFetch(`/branches/${owner}/${repo}?access_token=${accessToken}`);
+        
+        let html;
+
+        if (data && data.branches && data.branches.length > 0) {
+            const branchListItems = data.branches.map(branch => `
+                <li class="bg-gray-700 p-3 rounded-md flex items-center shadow">
+                    <i class="fas fa-code-branch text-cyan-400 mr-3"></i>
+                    <span class="font-mono text-gray-200">${branch}</span>
+                </li>
+            `).join('');
+
+            html = `
+                <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-cyan-500 pb-2">
+                    <i class="fas fa-code-branch mr-2"></i> 倉庫分支列表
+                </h2>
+                <ul class="space-y-3">
+                    ${branchListItems}
+                </ul>
+            `;
+        } else {
+            html = `
+                <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-cyan-500 pb-2">
+                    <i class="fas fa-code-branch mr-2"></i> 倉庫分支列表
+                </h2>
+                <p class="text-gray-400">此倉庫中沒有找到任何分支，或倉庫是空的。</p>
+            `;
+        }
+        
+        displayContent(html);
+
+    } catch (error) {
+        // The apiFetch function already handles displaying the error message.
+        // You can add extra logging here if needed.
+        console.error("Error fetching branches:", error);
+    }
+}
+
+
+async function getOverview() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading();
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const data = await apiFetch(`/overview/repos/${owner}/${repo}?access_token=${accessToken}`);
+        
+        const html = `
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div>
+                    <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-blue-500 pb-2">
+                        <i class="fas fa-search mr-2"></i>AI 專案概覽
+                    </h2>
+                    <div class="prose prose-invert max-w-none text-gray-300">
+                        ${marked.parse(data.overview)}
+                    </div>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-gray-500 pb-2">
+                        <i class="fas fa-folder-tree mr-2"></i>檔案結構
+                    </h2>
+                    <pre class="bg-gray-900 p-4 rounded-md text-gray-300 overflow-auto h-[400px] text-sm"><code>${data.file_structure || '無法載入檔案結構'}</code></pre>
+                </div>
+            </div>
+        `;
+        displayContent(html);
+    } catch (error) {}
+}
+
+async function getTrends() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在進行深度趨勢分析，可能需要一分鐘左右...');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const data = await apiFetch(`/trends/repos/${owner}/${repo}/perplexity/trends?access_token=${accessToken}`);
+
+        const commitTypeStats = data.statistics;
+        const commitTypeLabels = Object.keys(commitTypeStats);
+        const commitTypeValues = Object.values(commitTypeStats);
+
+        const activityData = data.activity_analysis;
+        const topModules = activityData.top_modules;
+        const moduleLabels = topModules.map(item => item[0]);
+        const moduleValues = topModules.map(item => item[1]);
+
+        const html = `
+            <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-green-500 pb-2">倉庫趨勢分析</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div>
+                    <h3 class="text-xl font-bold mb-4">近期 Commit 類型分析 (最近 ${data.commit_count} 筆)</h3>
+                    <div class="bg-gray-800 p-4 rounded-lg"><canvas id="trends-chart"></canvas></div>
+                    <div class="prose prose-invert max-w-none text-gray-300 mt-4">${marked.parse(data.trends_analysis)}</div>
+                </div>
+                <div>
+                    <h3 class="text-xl font-bold mb-4">程式碼庫活躍度分析 (最近 200 筆)</h3>
+                    <div class="bg-gray-800 p-4 rounded-lg"><canvas id="activity-chart"></canvas></div>
+                    <div class="prose prose-invert max-w-none text-gray-300 mt-4">${marked.parse(activityData.analysis_text)}</div>
+                </div>
+            </div>
+        `;
+        displayContent(html);
+        
+        const trendsCtx = document.getElementById('trends-chart').getContext('2d');
+        new Chart(trendsCtx, {
+            type: 'doughnut',
+            data: { labels: commitTypeLabels, datasets: [{ label: 'Commit 分類', data: commitTypeValues, backgroundColor: ['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#6B7280'], borderColor: '#4B5563', borderWidth: 1 }] },
+            options: { responsive: true, plugins: { legend: { position: 'top', labels: { color: '#D1D5DB' } }, title: { display: true, text: 'Commit 分類統計', color: '#F9FAFB' } } }
+        });
+
+        const activityCtx = document.getElementById('activity-chart').getContext('2d');
+        new Chart(activityCtx, {
+            type: 'bar',
+            data: {
+                labels: moduleLabels,
+                datasets: [{
+                    label: '模組修改次數',
+                    data: moduleValues,
+                    backgroundColor: 'rgba(54, 162, 235, 0.6)',
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    title: { display: true, text: '最活躍的模組 Top 10', color: '#F9FAFB' }
+                },
+                scales: {
+                    x: { ticks: { color: '#D1D5DB' } },
+                    y: { ticks: { color: '#D1D5DB' } }
+                }
+            }
+        });
+
+    } catch (error) {}
+}
+
+async function getTechDebtReport() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading('正在進行全專案技術債掃描，可能需要較長時間...');
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const data = await apiFetch(`/tech_debt/repos/${owner}/${repo}/perplexity/tech-debt?access_token=${accessToken}`);
+
+        const topFiles = data.activity_analysis.top_files;
+        const topModules = data.activity_analysis.top_modules;
+
+        let topFilesHtml = topFiles.map(item => `<tr><td class="py-2 px-4 border-b border-gray-700">${item[0]}</td><td class="py-2 px-4 border-b border-gray-700 text-center">${item[1]}</td></tr>`).join('');
+        let topModulesHtml = topModules.map(item => `<tr><td class="py-2 px-4 border-b border-gray-700">${item[0]}</td><td class="py-2 px-4 border-b border-gray-700 text-center">${item[1]}</td></tr>`).join('');
+        
+        const html = `
+            <h2 class="text-3xl font-bold mb-6 text-white border-b-2 border-yellow-500 pb-2">
+                <i class="fas fa-biohazard mr-2"></i> 技術債分析報告
+            </h2>
+            <div class="grid grid-cols-1 lg:grid-cols-5 gap-8">
+                <div class="lg:col-span-3 prose prose-invert max-w-none text-gray-300">
+                    ${marked.parse(data.analysis)}
+                </div>
+                <div class="lg:col-span-2 space-y-6">
+                    <div>
+                        <h3 class="text-xl font-bold mb-3">最常變更的檔案 (Top 10)</h3>
+                        <table class="w-full text-left bg-gray-700 rounded-lg overflow-hidden">
+                            <thead><tr><th class="py-2 px-4 bg-gray-800">檔案路徑</th><th class="py-2 px-4 bg-gray-800 text-center">變更次數</th></tr></thead>
+                            <tbody>${topFilesHtml}</tbody>
+                        </table>
+                    </div>
+                     <div>
+                        <h3 class="text-xl font-bold mb-3">最活躍的模組 (Top 10)</h3>
+                        <table class="w-full text-left bg-gray-700 rounded-lg overflow-hidden">
+                            <thead><tr><th class="py-2 px-4 bg-gray-800">模組名稱</th><th class="py-2 px-4 bg-gray-800 text-center">變更次數</th></tr></thead>
+                            <tbody>${topModulesHtml}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+        displayContent(html);
+    } catch (error) {}
+}
+
+
+async function showCommitPRScreen() {
+    if (!selectedRepoInfo.owner) return;
+    showLoading();
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const [commits, prs] = await Promise.all([
+             apiFetch(`/repo_commit/repos/${owner}/${repo}/perplexity?access_token=${accessToken}`),
+             apiFetch(`/pr/repos/${owner}/${repo}/pulls?access_token=${accessToken}`)
+        ]);
+
+        let commitsHtml = commits.commits.slice(0, 15).map(c => `<li class="border-b border-gray-700 py-2 flex justify-between items-center"><span class="truncate pr-4" title="${c.name}">${c.name.split('\n')[0]}</span><button class="commit-analyze-btn bg-gray-600 hover:bg-gray-500 text-white text-sm py-1 px-2 rounded flex-shrink-0" data-sha="${c.sha}">分析 Commit</button></li>`).join('');
+        
+        let prsHtml = prs.map(pr => `
+            <li class="border-b border-gray-700 py-3 px-2 flex justify-between items-center">
+                <span class="truncate pr-4" title="${pr.title}">#${pr.number} ${pr.title}</span>
+                <button class="pr-analyze-btn bg-purple-600 hover:bg-purple-500 text-white text-sm py-1 px-2 rounded flex-shrink-0" data-pr-number="${pr.number}">分析 PR</button>
+            </li>`).join('');
+
+        const html = `<div class="grid grid-cols-1 md:grid-cols-2 gap-8"><div><h3 class="text-xl font-bold mb-3 text-white">最近的 Pull Requests</h3><ul class="bg-gray-700 p-3 rounded-lg">${prsHtml || '<li>無開啟中的 Pull Requests</li>'}</ul></div><div><h3 class="text-xl font-bold mb-3 text-white">最近的 Commits</h3><ul class="bg-gray-700 p-3 rounded-lg">${commitsHtml || '<li>無 Commits</li>'}</ul></div></div><div id="commit-pr-analysis-result" class="mt-6"></div>`;
+        displayContent(html);
+        
+        document.querySelectorAll('.commit-analyze-btn').forEach(btn => btn.addEventListener('click', (e) => analyzeCommit(e.target.dataset.sha)));
+        document.querySelectorAll('.pr-analyze-btn').forEach(btn => btn.addEventListener('click', (e) => analyzePR(e.target.dataset.prNumber)));
+    } catch (error) {
+        displayError('無法獲取 Commits 或 PRs 列表');
+    }
+}
+
+async function analyzeCommit(sha) {
+    const resultDiv = document.getElementById('commit-pr-analysis-result');
+    resultDiv.innerHTML = `<div class="text-center p-4">分析 Commit ${sha.substring(0,7)} 中...</div>`;
+    const { owner, repo } = selectedRepoInfo;
+    const endpoint = `/diff/repos/${owner}/${repo}/perplexity/commits/${sha}?access_token=${accessToken}`;
+    try {
+        const data = await apiFetch(endpoint, { method: 'POST' });
+        resultDiv.innerHTML = `<h4 class="text-lg font-bold mt-4 mb-2">Commit ${sha.substring(0,7)} 分析結果</h4><div class="prose prose-invert max-w-none p-4 bg-gray-900 rounded">${marked.parse(data.analysis)}</div>`;
+    } catch (error) {
+        resultDiv.innerHTML = `<div class="text-red-400 p-4">分析失敗: ${error.message}</div>`;
+    }
+}
+
+async function analyzePR(prNumber) {
+    const resultDiv = document.getElementById('commit-pr-analysis-result');
+    resultDiv.innerHTML = `<div class="text-center p-4">分析 PR #${prNumber} 中...</div>`;
+    
+    const { owner, repo } = selectedRepoInfo;
+    let endpoint = `/pr/repos/${owner}/${repo}/pulls/${prNumber}?access_token=${accessToken}`;
+
+    try {
+        const data = await apiFetch(endpoint);
+        lastPRAnalysis = data.pull_request_analysis; 
+
+        const analysisHtml = marked.parse(data.pull_request_analysis);
+        const postButtonHtml = `
+            <div class="mt-4 pt-4 border-t border-gray-700 text-right">
+                <button id="post-pr-comment-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300" data-pr-number="${prNumber}">
+                    <i class="fas fa-paper-plane mr-2"></i>發佈評論到 GitHub
+                </button>
+            </div>
+        `;
+
+        resultDiv.innerHTML = `
+            <h4 class="text-lg font-bold mt-4 mb-2">PR #${prNumber} 分析結果</h4>
+            <div class="prose prose-invert max-w-none p-4 bg-gray-900 rounded">
+                ${analysisHtml}
+            </div>
+            ${postButtonHtml}
+        `;
+        
+        document.getElementById('post-pr-comment-btn').addEventListener('click', (e) => postPRComment(e.target.dataset.prNumber));
+
+    } catch (error) {
+        resultDiv.innerHTML = `<div class="text-red-400 p-4">分析失敗: ${error.message}</div>`;
+    }
+}
+
+async function postPRComment(prNumber) {
+    const postBtn = document.getElementById('post-pr-comment-btn');
+    postBtn.disabled = true;
+    postBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>發佈中...`;
+
+    const { owner, repo } = selectedRepoInfo;
+    const endpoint = `/pr/repos/${owner}/${repo}/pulls/${prNumber}/comments?access_token=${accessToken}`;
+    
+    try {
+        const response = await apiFetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ comment: lastPRAnalysis })
+        });
+        showToast(response.message);
+        postBtn.innerHTML = `<i class="fas fa-check mr-2"></i>已發佈！`;
+    } catch (error) {
+        showToast(`評論發佈失敗: ${error.message}`);
+        postBtn.disabled = false;
+        postBtn.innerHTML = `<i class="fas fa-paper-plane mr-2"></i>發佈評論到 GitHub`;
+    }
+}
+
+async function showChatScreen() {
+    let commitSelectionHtml = '';
+    try {
+        const { owner, repo } = selectedRepoInfo;
+        const commitsData = await apiFetch(`/repo_commit/repos/${owner}/${repo}/perplexity?access_token=${accessToken}`);
+        commitSelectionHtml = `
+            <label for="commit-context-select" class="text-sm text-gray-400">選擇 Commit 上下文:</label>
+            <select id="commit-context-select" class="w-full bg-gray-600 text-white p-2 rounded mt-1 mb-2 text-sm">
+                <option value="">使用最新 Commit</option>
+                ${commitsData.commits.slice(0, 10).map(c => `<option value="${c.sha}">[${c.sha.substring(0,7)}] ${c.name.split('\n')[0]}</option>`).join('')}
+            </select>
+        `;
+    } catch (error) { console.error("Failed to load commits for chat context", error); }
+    
+    const html = `
+        <h2 class="text-2xl font-bold mb-4 text-white border-b-2 border-teal-500 pb-2">智能問答</h2>
+        
+        <div id="chat-mode-selector" class="mb-4 grid grid-cols-3 gap-1 bg-gray-700 p-1 rounded-lg">
+            <button data-mode="repository" class="chat-mode-btn py-2 px-4 text-sm font-bold rounded-md transition-colors duration-300">
+                <i class="fas fa-book mr-2"></i>全域問答
+            </button>
+            <button data-mode="commit" class="chat-mode-btn py-2 px-4 text-sm font-bold rounded-md transition-colors duration-300">
+                <i class="fas fa-code-commit mr-2"></i>Commit 問答
+            </button>
+            <button data-mode="what-if" class="chat-mode-btn py-2 px-4 text-sm font-bold rounded-md transition-colors duration-300">
+                <i class="fas fa-magic-wand-sparkles mr-2"></i>What-if 場景
+            </button>
+        </div>
+
+        <div class="flex flex-col h-[60vh]">
+            <div id="chat-output" class="flex-grow bg-gray-900 p-4 rounded-t-lg overflow-y-auto"></div>
+            <div class="bg-gray-700 p-4 rounded-b-lg">
+                <div id="commit-context-container" class="hidden">
+                    ${commitSelectionHtml}
+                </div>
+                <div class="flex">
+                    <input type="text" id="chat-input" class="flex-grow bg-gray-600 text-white rounded-l-md p-3 focus:outline-none focus:ring-2 focus:ring-teal-500" placeholder="對整個專案提問...">
+                    <button id="send-chat-btn" class="bg-teal-600 hover:bg-teal-500 text-white font-bold px-6 py-3 rounded-r-md">發送</button>
+                </div>
+            </div>
+        </div>
+    `;
+    displayContent(html);
+    
+    const modeButtons = document.querySelectorAll('.chat-mode-btn');
+    const commitContextContainer = document.getElementById('commit-context-container');
+    const chatInput = document.getElementById('chat-input');
+
+    function setChatMode(mode) {
+        modeButtons.forEach(btn => {
+            if (btn.dataset.mode === mode) {
+                btn.classList.add('bg-teal-600', 'text-white');
+                btn.classList.remove('text-gray-400');
+            } else {
+                btn.classList.remove('bg-teal-600', 'text-white');
+                btn.classList.add('text-gray-400');
+            }
+        });
+        
+        if (mode === 'commit') {
+            commitContextContainer.classList.remove('hidden');
+            chatInput.placeholder = '針對選擇的 Commit 提問...';
+        } else {
+            commitContextContainer.classList.add('hidden');
+            if (mode === 'repository') {
+                chatInput.placeholder = '對整個專案提問... (例如：登入流程是什麼？)';
+            } else { // what-if
+                chatInput.placeholder = '提出一個假設性變更... (例如：如果修改 setting.py 會怎樣？)';
+            }
+        }
+        document.getElementById('chat-mode-selector').dataset.currentMode = mode;
+    }
+
+    modeButtons.forEach(btn => btn.addEventListener('click', () => setChatMode(btn.dataset.mode)));
+    setChatMode('repository');
+
+    document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
+    document.getElementById('chat-input').addEventListener('keyup', (e) => { if (e.key === 'Enter') sendChatMessage(); });
+}
+
+async function sendChatMessage() {
+    const chatInput = document.getElementById('chat-input');
+    const question = chatInput.value.trim();
+    if (!question) return;
+
+    const chatOutput = document.getElementById('chat-output');
+    chatOutput.innerHTML += `<div class="mb-2 text-right"><span class="bg-blue-600 text-white p-2 rounded-lg inline-block">${question}</span></div>`;
+    chatInput.value = '';
+    chatInput.disabled = true;
+    document.getElementById('send-chat-btn').disabled = true;
+    chatOutput.scrollTop = chatOutput.scrollHeight;
+    
+    const thinkingIndicator = document.createElement('div');
+    thinkingIndicator.id = 'thinking-indicator';
+    thinkingIndicator.innerHTML = `<div class="mb-2"><span class="bg-gray-700 text-white p-2 rounded-lg inline-block"><i class="fas fa-spinner fa-spin mr-2"></i>AI 正在思考中... (這可能需要一點時間)</span></div>`;
+    chatOutput.appendChild(thinkingIndicator);
+    chatOutput.scrollTop = chatOutput.scrollHeight;
+
+    const { owner, repo } = selectedRepoInfo;
+    const mode = document.getElementById('chat-mode-selector').dataset.currentMode;
+    
+    let targetSha = '';
+    if (mode === 'commit') {
+        const commitContextSelect = document.getElementById('commit-context-select');
+        targetSha = commitContextSelect ? commitContextSelect.value : '';
+    }
+    
+    const endpoint = `/chat/repos/${owner}/${repo}/perplexity?access_token=${accessToken}&question=${encodeURIComponent(question)}&mode=${mode}&target_sha=${targetSha}`;
+    
+    try {
+        const data = await apiFetch(endpoint, { method: 'POST' });
+        chatOutput.innerHTML += `<div class="mb-2"><span class="bg-gray-700 text-white p-2 rounded-lg inline-block">${marked.parse(data.answer)}</span></div>`;
+    } catch (error) {
+        chatOutput.innerHTML += `<div class="mb-2"><span class="bg-red-800 text-white p-2 rounded-lg inline-block">錯誤: ${error.message}</span></div>`;
+    } finally {
+        document.getElementById('thinking-indicator')?.remove();
+        chatInput.disabled = false;
+        document.getElementById('send-chat-btn').disabled = false;
+        chatInput.focus();
+        chatOutput.scrollTop = chatOutput.scrollHeight;
+    }
+}
+
+// --- INITIALIZATION ---
+window.addEventListener('load', async () => {
+    await handleOAuthCallback();
+    await initializeUser();
+});
+</script>
+</body>
+</html>
