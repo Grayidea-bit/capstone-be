@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 import httpx
+import unicodedata
 from ..setting import (
     validate_github_token,
     generate_ai_content,
@@ -143,7 +144,7 @@ async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str 
 你是一位專精於業務流程分析的系統分析師。
 
 ### **任務 (Task)**
-根據以下提供的專案「AI 專案概覽」文字，將其核心功能和工作流程，轉換成一份簡潔的 PlantUML **活動圖 (Activity Diagram)**。
+根據以下提供的專案「AI 專案概覽」文字，將其核心功能和工作流程，轉換成一份能反映**條件分支**和**主要流程**的 PlantUML **活動圖 (Activity Diagram)**。
 
 ### **分析資料 (Project Overview Text)**
 ```
@@ -151,22 +152,55 @@ async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str 
 ```
 
 ### **輸出要求 (Output Requirements)**
-1.  **重點**: 專注於概覽中提到的**核心功能**和**主要步驟** (例如：程式碼分析 -> 差異比較 -> 技術債識別 -> 對話互動)。
+1.  **重點**: 專注於概覽中提到的**核心功能**和**主要步驟**。
 2.  **簡潔**: 忽略次要細節，保持圖表高層次且易於理解。
-3.  **格式**: 必須包含 `@startuml` 和 `@enduml` 標籤。
-4.  **語氣**: 使用**繁體中文**來描述流程節點。
+3.  **格式**: 輸出**必須**以 `@startuml` 開頭，並以 `@enduml` 結尾。
+4.  **節點語言 (Node Language)**: 流程節點（即引號 "..." 內的文字）必須使用**繁體中文**。
 5.  **語法**:
-    * 使用標準的 PlantUML 活動圖語法。
-    * 以 `(*)` (開始) 和 `(*)` (結束) 作為起點和終點。
+    * 遵循標準的 PlantUML 活動圖語法。
+    * **以 `start` 關鍵字作為起點。**
+    * **以 `(*)` 關鍵字作為終點。**
     * 使用 `-->` 串聯流程。
-    * 範例： `(*) --> "功能一" --> "功能二" --> (*)`
-6.  **嚴格**: 絕對不要在 `@startuml` ... `@enduml` 區塊之外包含任何解釋性文字或註解。
+6.  **關鍵語法 - 條件分支 (If/Else):**
+    * 如果流程中有效能會導致不同結果的「判斷點」，請務必使用 `if` 語法。
+    * **範例 (僅供參考):**
+        if (使用者是否登入？) then (是)
+            --> "顯示使用者資料"
+        else (否)
+            --> "導向登入頁面"
+        endif
+        --> "繼續後續流程"
+7.  **關鍵語法 - 平行處理 (Fork/Join):**
+    * 如果多個任務可以同時進行，請使用 `fork`。
+    * **範例 (僅供參考):**
+        fork
+            --> "任務 A"
+        fork again
+            --> "任務 B"
+        endfork
+        --> "匯總 A 和 B 的結果"
+8.  **重要規則**:
+    * 範例**僅用於說明語法**，你**絕對不能**在最終輸出中照抄範例中的文字。
+    * 你的輸出**必須**基於「分析資料」({overview_text}) 的內容來生成。
+9.  **語法關鍵**:
+    * `if (...)` 括號中的條件文字，**絕對不能** 加上引號 (" ")。
+    * **(錯誤範例):** `if ("是否通過驗證？") then (是)`
+    * **(正確範例):** `if (是否通過驗證？) then (是)`
+    * 只有活動節點（例如 `--> "..."`）才需要引號。
+10. **(強化) 嚴格輸出 (Strict Output)**:
+    * 你的回應**必須**直接是 PlantUML 代碼本身。
+    * **絕對不要**在 `@startuml` ... `@enduml` 區塊之外包含任何解釋性文字、註解、開頭問候語（例如 "好的，這裏是..."）或結尾總結。
+    * 你的唯一輸出就是代碼。
+11. **(新增) 符號規範 (Symbol Rules)**:
+    * 所有 PlantUML **語法**字元（例如 `-->`, `if`, `then`, `else`, `endif`, `fork`, `endfork`, `(*)`, `(`, `)`, `:`）**必須**使用**半形 (half-width)** 符號。
+    * 在流程節點（引號內的文字）之外使用任何全形符號（例如 `：`、`（`、`）`、`－`、`＞`）都將導致語法錯誤，必須禁止。
 
 請開始生成 PlantUML：
 """
             
             try:
                 plantuml_code = await generate_ai_content(flowchart_prompt)
+                print(plantuml_code)
                 logger.info("成功生成 PlantUML 流程圖。")
             except Exception as e:
                 logger.error(f"AI PlantUML 流程圖生成失敗: {e}", exc_info=True)
@@ -188,7 +222,6 @@ async def get_repo_overview(owner: str, repo: str,branch:str, access_token: str 
                 except Exception as e:
                     logger.error(f"寫入專案概覽快取失敗: {e}", extra={"cache_key": cache_key})
             # ***********************************
-
             return result
             
         except httpx.HTTPStatusError as e:
