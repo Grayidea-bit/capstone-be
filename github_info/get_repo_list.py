@@ -27,16 +27,9 @@ async def get_repos(access_token: str = Query(None)):
             repos_response = await client.get(
                 "https://api.github.com/user/repos",
                 headers={"Authorization": f"Bearer {access_token}"},
-<<<<<<< HEAD
-                params={"type": "owner", "sort": "updated", "per_page": 100},
-            )
-            repos_response.raise_for_status()
-            repos_response.raise_for_status()
-=======
                 params={"type": "all", "sort": "updated", "per_page": 100},
             )
             repos_response.raise_for_status()
->>>>>>> perplexity
             repos_data = repos_response.json()
             logger.info(f"成功獲取 {len(repos_data)} 個倉庫。")
             return repos_data
