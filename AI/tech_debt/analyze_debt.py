@@ -7,7 +7,7 @@ from ..setting import (
     redis_client,      # 確保 redis_client 已導入
     CACHE_TTL_SECONDS  # 確保 CACHE_TTL_SECONDS 已導入
 )
-from ..trends.analyze_trends import analyze_file_activity
+from collections import Counter
 from ..code_analyzer import CodeAnalyzer
 import httpx
 from radon.complexity import cc_visit
@@ -158,3 +158,107 @@ async def get_tech_debt_report(owner: str, repo: str,branch:str, access_token: s
         except Exception as e:
             logger.error(f"生成技術債報告時發生意外錯誤: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"生成技術債報告時發生意外錯誤: {str(e)}")
+        
+        
+async def analyze_file_activity(owner: str, repo: str, branch:str, access_token: str, commits_data: list, limit: int = 200):
+    """分析最近 N 個 commit 的檔案和模組修改頻率，並加入快取機制"""
+    
+    latest_commit_sha = commits_data[0]['sha']
+    cache_key = f"activity_analysis:{owner}/{repo}/{branch}:{latest_commit_sha}:{limit}"
+
+    if redis_client:
+        try:
+            cached_result = redis_client.get(cache_key)
+            if cached_result:
+                logger.info(f"檔案活躍度分析快取命中: {cache_key}")
+                return json.loads(cached_result)
+        except Exception as e:
+            logger.error(f"讀取活躍度分析快取失敗: {e}", extra={"cache_key": cache_key})
+
+    logger.info(f"開始對 {owner}/{repo} 進行檔案活躍度分析，分析最近 {limit} 筆 commits。")
+    
+    commits_to_analyze = commits_data[:limit]
+    all_changed_files = []
+
+    async with httpx.AsyncClient() as client:
+        # (此處的程式碼維持不變)
+        for i, commit in enumerate(commits_to_analyze):
+            sha = commit["sha"]
+            logger.debug(f"正在獲取 commit #{i+1} ({sha[:7]}) 的檔案變更...")
+            try:
+                commit_details_res = await client.get(
+                    f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"sha":branch}
+                )
+                commit_details_res.raise_for_status()
+                commit_details = commit_details_res.json()
+                
+                if 'files' in commit_details:
+                    for file in commit_details['files']:
+                        all_changed_files.append(file['filename'])
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"無法獲取 commit {sha} 的詳細資訊: {e}")
+                continue
+
+    file_counts = Counter(all_changed_files)
+    
+    module_counts = Counter()
+    for file_path, count in file_counts.items():
+        # 修正了潛在的 bug，確保即使檔案在根目錄也能正確處理
+        module_name = file_path.split('/')[0] if '/' in file_path else file_path
+        if module_name:
+            module_counts[module_name] += count
+
+    top_files_text = "\n".join([f"- `{path}`: {count} 次" for path, count in file_counts.most_common(10)])
+    top_modules_text = "\n".join([f"- `{module}`: {count} 次" for module, count in module_counts.most_common(10)])
+
+    prompt = f"""
+### **角色 (Role)**
+你是一位經驗豐富的首席工程師 (Principal Engineer)，擅長從程式碼庫的演進歷史中洞察架構的優劣和團隊的開發模式。
+
+### **任務 (Task)**
+根據提供的最近 {len(commits_to_analyze)} 筆 commit 中，檔案和模組的修改頻率統計，撰寫一份深入的**程式碼庫健康度與演進趨勢分析**。
+
+### **核心分析數據 (Primary Data Sources)**
+* **最常變更的檔案 (Top 10 Files Changed)**:
+    ```
+    {top_files_text}
+    ```
+* **最活躍的模組 (Top 10 Modules Changed)**:
+    ```
+    {top_modules_text}
+    ```
+
+### **輸出要求 (Output Requirements)**
+請以繁體中文，並嚴格遵循以下 Markdown 格式輸出報告：
+
+#### 1. **開發重心與核心模組識別**
+* 根據「最活躍的模組」統計，分析近期專案的開發重心在哪裡？哪些模組是這個系統的核心？
+
+#### 2. **潛在技術債分析 (程式碼熱點)**
+* 根據「最常變更的檔案」列表，是否存在某些檔案被修改的頻率遠高於其他檔案？
+* 如果存在這樣的「熱點」檔案，分析可能的原因（例如：該檔案職責過於龐大、設定檔經常變動、或是核心邏輯的集中點）。這是否暗示了潛在的技術債或需要進行重構？
+
+#### 3. **架構健康度與耦合性評估**
+* 綜合來看，這些變更分佈是否健康？是集中在少數幾個檔案，還是廣泛分佈在不同模組？一個健康的系統通常變更是分散的，而脆弱的系統則常常牽一髮而動全身，暗示著模組間的高度耦合。
+
+請開始生成分析報告：
+"""
+
+    ai_analysis_text = await generate_ai_content(prompt)
+
+    result = {
+        "analysis_text": ai_analysis_text,
+        "top_files": file_counts.most_common(10),
+        "top_modules": module_counts.most_common(10)
+    }
+
+    if redis_client:
+        try:
+            redis_client.set(cache_key, json.dumps(result), ex=CACHE_TTL_SECONDS)
+            logger.info(f"已快取檔案活躍度分析結果: {cache_key}")
+        except Exception as e:
+            logger.error(f"寫入活躍度分析快取失敗: {e}", extra={"cache_key": cache_key})
+    
+    return result

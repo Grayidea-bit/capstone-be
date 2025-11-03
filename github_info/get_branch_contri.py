@@ -1,11 +1,9 @@
 from fastapi import APIRouter, HTTPException, Query
 import httpx
 from collections import defaultdict
+from .async_request import async_multiple_request
 
 contri_router = APIRouter()
-
-# GitHub API 的基礎 URL
-GITHUB_API_URL = "https://api.github.com"
 
 @contri_router.get("/repos/{owner}/{repo}/contributions")
 async def get_all_branch_contributions(
@@ -28,7 +26,7 @@ async def get_all_branch_contributions(
     async with httpx.AsyncClient() as client:
         try:
             # 1. 獲取所有分支
-            branches_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/branches"
+            branches_url = f"https://api.github.com/repos/{owner}/{repo}/branches"
             branches_response = await client.get(branches_url, headers=headers)
             branches_response.raise_for_status()
             branches = branches_response.json()
@@ -36,19 +34,17 @@ async def get_all_branch_contributions(
             # 2. 遍歷每個分支以獲取 commits
             for branch in branches:
                 branch_name = branch['name']
-                page = 1
-                while True:
-                    # 分頁獲取 commit
-                    commits_url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/commits?sha={branch_name}&per_page=100&page={page}"
-                    commits_response = await client.get(commits_url, headers=headers)
-                    commits_response.raise_for_status()
-                    commits_data = commits_response.json()
+                
+                commits_url = f"https://api.github.com/repos/{owner}/{repo}/commits"
+                commit_response=await async_multiple_request(commits_url,headers,branch_name)
+                
+                if not commit_response:
+                    continue
+                
+                for page in range(1, len(commit_response) + 1):
+                    for context in commit_response[page]:
 
-                    if not commits_data:
-                        break # 如果這一頁沒有數據，說明這個分支的 commits 已經獲取完畢
-
-                    for commit in commits_data:
-                        commit_sha = commit['sha']
+                        commit_sha = context['sha']
                         # 如果這個 commit 已經處理過，就跳過
                         if commit_sha in processed_commits:
                             continue
@@ -56,13 +52,11 @@ async def get_all_branch_contributions(
                         processed_commits.add(commit_sha)
                         
                         # 作者可能為 null，需要檢查
-                        if commit.get('author') and commit['author'].get('login'):
-                            author_login = commit['author']['login']
+                        if context.get('author') and context['author'].get('login'):
+                            author_login = context['author']['login']
                             # 過濾掉 GitHub 官方的 no-reply 用戶
                             if 'users.noreply.github.com' not in author_login:
                                 contributions[author_login] += 1
-                    
-                    page += 1
 
         except httpx.HTTPStatusError as e:
             # 更詳細的錯誤日誌
