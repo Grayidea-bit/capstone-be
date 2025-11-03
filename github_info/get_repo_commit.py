@@ -35,9 +35,13 @@ async def get_commits(owner: str, repo: str,branch:str, access_token: str = Quer
                 "name": commit.get("commit", {}).get("message"),
                 "sha": commit.get("sha"),
             }
-            for commit in sorted_response
+            for commit in sorted_response    
             if commit.get("sha") and commit.get("commit", {}).get("message")
         ]
+        # limit text in 30 word
+        for commit in commit_info:
+            if len(commit.get("name"))>30:
+                commit["name"]=commit.get("name")[:30]+"..."
 
         return JSONResponse({"commits": commit_info})
 
